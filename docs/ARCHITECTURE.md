@@ -40,3 +40,9 @@ The browser module owns WebView2 session initialization, event subscriptions, mi
 Formal v0.1 top-level navigation accepts HTTPS on the default port for OpenAI-owned `chatgpt.com` and `openai.com` hosts (including their subdomains), plus the exact Google, Apple and Microsoft identity-provider entry hosts required for user-controlled sign-in. Unknown HTTPS hosts, lookalikes, non-default ports and non-HTTPS targets are blocked. The old any-HTTPS method remains only as historical Phase 0 test evidence and is not used by the runtime session.
 
 `BrowserRestartGate` allows one automatic recovery after an unexpected close per user-started session. WPF integration will consume this policy later and must wait for the user to confirm Voice again rather than assuming that audio resumed.
+
+## Capture boundary
+
+The capture module exposes only primary-display capture. Product output is fixed at a maximum of 1920×1080 with aspect ratio preserved and no upscaling. Callers supply the application temporary directory; the module owns exactly one final PNG and one known in-progress `.tmp` file, serializes capture attempts, atomically replaces the final file after a complete encode, and removes the in-progress file after success or failure.
+
+Capture errors expose stable codes for unsupported systems, missing primary displays, invalid dimensions, timeout, access denial, temporary-file failure and graphics-device failure. Protected content, exclusive-fullscreen black frames and anti-cheat restrictions are reported as compatibility limitations; OpenGameMate does not attempt to bypass them or infer that a dark frame is necessarily an error.

@@ -179,6 +179,30 @@ public class Phase0UnitTests
     }
 
     [Fact]
+    public void ScreenshotCapture_UsesOneStableFileInsideInjectedTemporaryDirectory()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var capture = new OpenGameMate.Capture.PrimaryDisplayCapture(directory);
+
+        Assert.Equal(
+            Path.Combine(Path.GetFullPath(directory), "primary-display.png"),
+            capture.TemporaryScreenshotPath);
+        Assert.Equal(1920, OpenGameMate.Capture.PrimaryDisplayCapture.MaximumOutputWidth);
+        Assert.Equal(1080, OpenGameMate.Capture.PrimaryDisplayCapture.MaximumOutputHeight);
+    }
+
+    [Fact]
+    public void ScreenCaptureException_ExposesStableFailureCodeWithoutAPath()
+    {
+        var exception = new OpenGameMate.Capture.ScreenCaptureException(
+            OpenGameMate.Capture.CaptureFailureCode.TimedOut,
+            "Timed out while waiting for a frame.");
+
+        Assert.Equal(OpenGameMate.Capture.CaptureFailureCode.TimedOut, exception.Code);
+        Assert.DoesNotContain(Path.GetTempPath(), exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void FixedRuntimeDiscovery_ReturnsNullForMissingRoot()
     {
         var missingRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
