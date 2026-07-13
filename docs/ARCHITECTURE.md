@@ -52,3 +52,11 @@ Capture errors expose stable codes for unsupported systems, missing primary disp
 `AutomaticSendLoop` emits a fixed occurrence every two minutes and has no user-configurable interval. It never performs an immediate retry. Pause and runtime state are supplied as a predicate, so a non-running occurrence is skipped without changing the underlying periodic cadence; manual submissions therefore do not reset automatic timing.
 
 `SubmissionCoordinator` allows one active submission and has no queue. An automatic occurrence yields once before starting so a simultaneous manual request can reserve priority; a running manual submission likewise causes the automatic occurrence to be skipped. An operation that already started is not preempted. `ConversationReminderTracker` raises one reminder after two elapsed hours or 60 successful image submissions, whichever occurs first, and resets only when the user starts a new conversation.
+
+## Web-adapter boundary
+
+`ChatGptWebAdapter` may inspect only the current page origin, composer, attachment controls, send control and selector-based upload/error state. It may add the caller-supplied image and prompt and invoke one unambiguous send control. It does not read replies, history, accounts, cookies, tokens, full HTML or audio. Missing or ambiguous controls return `AdapterInvalid`; no random fallback click is attempted.
+
+Adapter rules are strict JSON containing only version tokens and length-bounded CSS selectors. Remote documents use a strict signed envelope: the base64 payload is verified byte-for-byte with RSA-PSS/SHA-256 before its strict schema and allowlisted fields are accepted. The downloader limits the document and payload sizes, requires HTTPS on the default port, and pins the exact `raw.githubusercontent.com/<official-owner>/<official-repository>/main/adapter-rules/chatgpt-v1.signed.json` path, including the final URI after redirects. Every rejection falls back to built-in rules.
+
+The repository currently has no declared official GitHub remote or maintainer-owned signing public key. Until maintainers provide those trust anchors, product composition must pass no verifier; the loader then returns `RemoteDisabled` without making a network request and uses built-in rules. A signing key must never be generated or stored in the client repository.

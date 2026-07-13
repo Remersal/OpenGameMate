@@ -8,11 +8,22 @@ public enum ValidationStatus
     Limited
 }
 
+public enum WebAdapterStatus
+{
+    Succeeded,
+    NotReady,
+    InvalidInput,
+    AdapterInvalid,
+    QuotaReached,
+    PlatformError,
+}
+
 public sealed record InputPreparationResult(
     bool FileInputSelected,
     bool AttachmentPreviewDetected,
     bool TextInserted,
-    string Code)
+    string Code,
+    WebAdapterStatus Status)
 {
     public bool ImageAdded => FileInputSelected || AttachmentPreviewDetected;
 }
@@ -21,7 +32,8 @@ public sealed record SubmissionResult(
     bool TriggerInvoked,
     bool ComposerCleared,
     bool AttachmentCleared,
-    string Code);
+    string Code,
+    WebAdapterStatus Status);
 
 public sealed record FocusSnapshot(
     long ForegroundWindow,

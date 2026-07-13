@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Runtime.InteropServices;
 using OpenGameMate.Browser;
 using OpenGameMate.Core;
 
@@ -6,48 +7,98 @@ namespace OpenGameMate.Adapters;
 
 public interface IAiWebAdapter
 {
-    Task<InputPreparationResult> PrepareInputAsync(string imagePath, string message);
+    Task<InputPreparationResult> PrepareInputAsync(
+        string imagePath,
+        string message,
+        CancellationToken cancellationToken = default);
 
-    Task<SubmissionResult> SubmitAsync();
+    Task<SubmissionResult> SubmitAsync(CancellationToken cancellationToken = default);
 }
 
 public sealed class ChatGptWebAdapter : IAiWebAdapter
 {
-    private const string FileInputMarker = "data-opengamemate-phase0-file";
+    private const string FileInputMarker = "data-opengamemate-file";
+    private const int MaximumMessageCharacters = 8000;
+    private const long MaximumImageBytes = 20 * 1024 * 1024;
     private readonly ChatGptBrowserSession _session;
+    private readonly ChatGptAdapterRules _rules;
 
-    public ChatGptWebAdapter(ChatGptBrowserSession session)
+    public ChatGptWebAdapter(
+        ChatGptBrowserSession session,
+        ChatGptAdapterRules? rules = null)
     {
+        ArgumentNullException.ThrowIfNull(session);
         _session = session;
+        _rules = rules ?? ChatGptAdapterRules.BuiltIn;
+        _rules.Validate();
     }
 
-    public async Task<InputPreparationResult> PrepareInputAsync(string imagePath, string message)
+    public async Task<InputPreparationResult> PrepareInputAsync(
+        string imagePath,
+        string message,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await PrepareInputCoreAsync(imagePath, message, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or JsonException or IOException or
+                UnauthorizedAccessException or COMException)
+        {
+            return new(false, false, false, "adapter-operation-failed", WebAdapterStatus.AdapterInvalid);
+        }
+    }
+
+    private async Task<InputPreparationResult> PrepareInputCoreAsync(
+        string imagePath,
+        string message,
+        CancellationToken cancellationToken)
     {
         if (!_session.IsInitialized || !_session.IsOnChatGpt())
         {
-            return new(false, false, false, "not-on-chatgpt");
+            return new(false, false, false, "not-on-chatgpt", WebAdapterStatus.NotReady);
+        }
+
+        if (string.IsNullOrWhiteSpace(message) || message.Length > MaximumMessageCharacters)
+        {
+            return new(false, false, false, "message-invalid", WebAdapterStatus.InvalidInput);
         }
 
         if (!File.Exists(imagePath))
         {
-            return new(false, false, false, "image-file-missing");
+            return new(false, false, false, "image-file-missing", WebAdapterStatus.InvalidInput);
         }
 
+        var imageLength = new FileInfo(imagePath).Length;
+        if (imageLength is <= 0 or > MaximumImageBytes)
+        {
+            return new(false, false, false, "image-file-size-invalid", WebAdapterStatus.InvalidInput);
+        }
+
+        var fileInputSelectorJson = JsonSerializer.Serialize(_rules.FileInputSelector);
+        var composerSelectorJson = JsonSerializer.Serialize(_rules.ComposerSelector);
+        var previewSelectorsJson = JsonSerializer.Serialize(_rules.AttachmentPreviewSelectors);
+
         var locateFileInput = await EvaluateAsync(
-            """
+            $$"""
             (() => {
               if (!(location.hostname === 'chatgpt.com' || location.hostname.endsWith('.chatgpt.com'))) {
                 return { code: 'unexpected-origin', count: 0 };
               }
-              document.querySelectorAll('input[data-opengamemate-phase0-file]')
-                .forEach(element => element.removeAttribute('data-opengamemate-phase0-file'));
-              const candidates = [...document.querySelectorAll('input[type="file"]')]
+              document.querySelectorAll('input[{{FileInputMarker}}]')
+                .forEach(element => element.removeAttribute('{{FileInputMarker}}'));
+              const candidates = [...document.querySelectorAll({{fileInputSelectorJson}})]
                 .filter(element => !element.disabled &&
                   (!element.accept || /image|png|jpe?g|gif/i.test(element.accept)));
               if (candidates.length !== 1) {
                 return { code: 'file-input-count', count: candidates.length };
               }
-              candidates[0].setAttribute('data-opengamemate-phase0-file', 'true');
+              candidates[0].setAttribute('{{FileInputMarker}}', 'true');
               return { code: 'ok', count: 1 };
             })()
             """);
@@ -68,7 +119,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             var fileNodeId = queryResponse.RootElement.GetProperty("nodeId").GetInt32();
             if (fileNodeId == 0)
             {
-                return new(false, false, false, "marked-file-input-not-found");
+                return new(false, false, false, "marked-file-input-not-found", WebAdapterStatus.AdapterInvalid);
             }
 
             using (await CallCdpAsync(
@@ -94,11 +145,11 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             // the narrow fallback: it targets only the composer and never opens a native picker.
             attachmentMethod = "composer-paste";
             var imageBase64Json = JsonSerializer.Serialize(
-                Convert.ToBase64String(await File.ReadAllBytesAsync(imagePath)));
+                Convert.ToBase64String(await File.ReadAllBytesAsync(imagePath, cancellationToken)));
             attachmentResult = await EvaluateAsync(
                 $$"""
                 (async () => {
-                  const composers = [...document.querySelectorAll('#prompt-textarea')]
+                  const composers = [...document.querySelectorAll({{composerSelectorJson}})]
                     .filter(element => !element.hasAttribute('disabled'));
                   if (composers.length !== 1) {
                     return { code: 'composer-count-before-paste', count: composers.length,
@@ -111,7 +162,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                     bytes[index] = binary.charCodeAt(index);
                   }
                   const transfer = new DataTransfer();
-                  transfer.items.add(new File([bytes], 'opengamemate-phase0.png', { type: 'image/png' }));
+                  transfer.items.add(new File([bytes], 'opengamemate-screen.png', { type: 'image/png' }));
                   const pasteEvent = new ClipboardEvent('paste', {
                     bubbles: true,
                     cancelable: true,
@@ -129,7 +180,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         }
         else
         {
-            return new(false, false, false, GetCode(locateFileInput));
+            return new(false, false, false, GetCode(locateFileInput), WebAdapterStatus.AdapterInvalid);
         }
 
         var messageJson = JsonSerializer.Serialize(message);
@@ -137,7 +188,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             $$"""
             (() => {
               const fileInput = document.querySelector('input[{{FileInputMarker}}="true"]');
-              const composers = [...document.querySelectorAll('#prompt-textarea')]
+              const composers = [...document.querySelectorAll({{composerSelectorJson}})]
                 .filter(element => !element.hasAttribute('disabled'));
               if (composers.length !== 1) {
                 return { code: 'composer-count', count: composers.length,
@@ -178,21 +229,14 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             })()
             """);
 
-        await Task.Delay(750);
+        await Task.Delay(750, cancellationToken);
         var probeResult = await EvaluateAsync(
             $$"""
             (() => {
               const fileInput = document.querySelector('input[{{FileInputMarker}}="true"]');
-              const composer = document.querySelector('#prompt-textarea');
+              const composer = document.querySelector({{composerSelectorJson}});
               const scope = composer?.closest('form') ?? document;
-              const previewSelectors = [
-                '[data-testid="file-thumbnail"]',
-                '[data-testid="file-thumbnail-container"]',
-                '[data-testid="attachment"]',
-                '[data-testid^="composer-attachment"]',
-                '[data-testid*="attachment-preview"]',
-                '[data-testid="remove-file-button"]'
-              ];
+              const previewSelectors = {{previewSelectorsJson}};
               const actual = composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement
                 ? composer.value
                 : composer?.innerText;
@@ -214,20 +258,47 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             fileSelected,
             previewDetected,
             GetBoolean(probeResult, "textInserted") || GetBoolean(inputResult, "textInserted"),
-            $"{attachmentMethod}:{GetCode(attachmentResult)}:{GetCode(probeResult)}");
+            $"{attachmentMethod}:{GetCode(attachmentResult)}:{GetCode(probeResult)}",
+            (fileSelected || previewDetected) &&
+            (GetBoolean(probeResult, "textInserted") || GetBoolean(inputResult, "textInserted"))
+                ? WebAdapterStatus.Succeeded
+                : WebAdapterStatus.AdapterInvalid);
     }
 
-    public async Task<SubmissionResult> SubmitAsync()
+    public async Task<SubmissionResult> SubmitAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await SubmitCoreAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or JsonException or IOException or
+                UnauthorizedAccessException or COMException)
+        {
+            return new(false, false, false, "adapter-operation-failed", WebAdapterStatus.AdapterInvalid);
+        }
+    }
+
+    private async Task<SubmissionResult> SubmitCoreAsync(CancellationToken cancellationToken)
     {
         if (!_session.IsInitialized || !_session.IsOnChatGpt())
         {
-            return new(false, false, false, "not-on-chatgpt");
+            return new(false, false, false, "not-on-chatgpt", WebAdapterStatus.NotReady);
         }
 
+        var sendButtonSelectorJson = JsonSerializer.Serialize(_rules.SendButtonSelector);
+        var composerSelectorJson = JsonSerializer.Serialize(_rules.ComposerSelector);
+        var quotaSelectorsJson = JsonSerializer.Serialize(_rules.QuotaErrorSelectors);
+        var platformErrorSelectorsJson = JsonSerializer.Serialize(_rules.PlatformErrorSelectors);
+
         var submitResult = await EvaluateAsync(
-            """
+            $$"""
             (() => {
-              const buttons = [...document.querySelectorAll('button[data-testid="send-button"]')];
+              const buttons = [...document.querySelectorAll({{sendButtonSelectorJson}})];
               if (buttons.length !== 1) return { code: 'send-button-count', count: buttons.length, invoked: false };
               const button = buttons[0];
               if (button.disabled || button.getAttribute('aria-disabled') === 'true') {
@@ -240,31 +311,55 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
 
         if (!GetBoolean(submitResult, "invoked"))
         {
-            return new(false, false, false, GetCode(submitResult));
+            return new(false, false, false, GetCode(submitResult), WebAdapterStatus.AdapterInvalid);
         }
 
-        await Task.Delay(1000);
+        await Task.Delay(1000, cancellationToken);
         var stateResult = await EvaluateAsync(
             $$"""
             (() => {
-              const composer = document.querySelector('#prompt-textarea');
+              const composer = document.querySelector({{composerSelectorJson}});
               const fileInput = document.querySelector('input[{{FileInputMarker}}="true"]');
+              const quotaSelectors = {{quotaSelectorsJson}};
+              const platformErrorSelectors = {{platformErrorSelectorsJson}};
               const text = composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement
                 ? composer.value
                 : composer?.innerText;
               return {
                 code: 'ok',
                 composerCleared: !text,
-                attachmentCleared: !fileInput || !fileInput.files || fileInput.files.length === 0
+                attachmentCleared: !fileInput || !fileInput.files || fileInput.files.length === 0,
+                quotaDetected: quotaSelectors.some(selector => document.querySelector(selector)),
+                platformErrorDetected: platformErrorSelectors.some(selector => document.querySelector(selector))
               };
             })()
             """);
 
+        var quotaDetected = GetBoolean(stateResult, "quotaDetected");
+        var platformErrorDetected = GetBoolean(stateResult, "platformErrorDetected");
+        var composerCleared = GetBoolean(stateResult, "composerCleared");
+        var attachmentCleared = GetBoolean(stateResult, "attachmentCleared");
+        var status = quotaDetected
+            ? WebAdapterStatus.QuotaReached
+            : platformErrorDetected
+                ? WebAdapterStatus.PlatformError
+                : composerCleared || attachmentCleared
+                    ? WebAdapterStatus.Succeeded
+                    : WebAdapterStatus.AdapterInvalid;
+        var code = status switch
+        {
+            WebAdapterStatus.QuotaReached => "quota-detected",
+            WebAdapterStatus.PlatformError => "platform-error-detected",
+            WebAdapterStatus.AdapterInvalid => "submission-state-not-observed",
+            _ => GetCode(stateResult),
+        };
+
         return new(
             true,
-            GetBoolean(stateResult, "composerCleared"),
-            GetBoolean(stateResult, "attachmentCleared"),
-            GetCode(stateResult));
+            composerCleared,
+            attachmentCleared,
+            code,
+            status);
     }
 
     private async Task<JsonElement> EvaluateAsync(string expression)
@@ -285,14 +380,14 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
     {
         if (response.TryGetProperty("exceptionDetails", out _))
         {
-            throw new InvalidOperationException("The page-side Phase 0 probe failed.");
+            throw new InvalidOperationException("The page-side adapter probe failed.");
         }
 
         if (!response.TryGetProperty("result", out var remoteObject) ||
             remoteObject.ValueKind != JsonValueKind.Object ||
             !remoteObject.TryGetProperty("value", out var value))
         {
-            throw new InvalidOperationException("The page-side Phase 0 probe returned an unsupported response shape.");
+            throw new InvalidOperationException("The page-side adapter probe returned an unsupported response shape.");
         }
 
         return value.Clone();

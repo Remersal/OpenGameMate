@@ -125,7 +125,11 @@ public class Phase0UnitTests
         bool expected)
     {
         var result = new OpenGameMate.Core.InputPreparationResult(
-            fileSelected, previewDetected, true, "test");
+            fileSelected,
+            previewDetected,
+            true,
+            "test",
+            OpenGameMate.Core.WebAdapterStatus.Succeeded);
 
         Assert.Equal(expected, result.ImageAdded);
     }
