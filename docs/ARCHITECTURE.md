@@ -32,3 +32,11 @@ Both modes use the same child layout: `settings.json`, `logs`, `WebView2`, `temp
 ## Privacy-safe diagnostics
 
 Product diagnostics are JSON Lines records with an allowlisted schema: timestamp, level, event token, state, stable error token, success flag, image dimensions, file size and exception type. There is intentionally no arbitrary message, webpage content, prompt, response, account, credential, token, audio or path field.
+
+## Browser boundary
+
+The browser module owns WebView2 session initialization, event subscriptions, microphone permission mediation and fail-closed top-level navigation decisions. The WPF window owns the WebView2 control and disposes it after the session has detached its handlers. The persistent user data folder is supplied by the composition root; OpenGameMate never reads cookies, tokens, history or account data from it.
+
+Formal v0.1 top-level navigation accepts HTTPS on the default port for OpenAI-owned `chatgpt.com` and `openai.com` hosts (including their subdomains), plus the exact Google, Apple and Microsoft identity-provider entry hosts required for user-controlled sign-in. Unknown HTTPS hosts, lookalikes, non-default ports and non-HTTPS targets are blocked. The old any-HTTPS method remains only as historical Phase 0 test evidence and is not used by the runtime session.
+
+`BrowserRestartGate` allows one automatic recovery after an unexpected close per user-started session. WPF integration will consume this policy later and must wait for the user to confirm Voice again rather than assuming that audio resumed.

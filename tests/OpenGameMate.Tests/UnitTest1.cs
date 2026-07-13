@@ -1,3 +1,5 @@
+using OpenGameMate.Browser;
+
 namespace OpenGameMate.Tests;
 
 public class Phase0UnitTests
@@ -36,6 +38,55 @@ public class Phase0UnitTests
     {
         Assert.False(
             OpenGameMate.Browser.ChatGptBrowserSession.IsAllowedPhase0NavigationUri(new Uri(value)));
+    }
+
+    [Theory]
+    [InlineData("https://chatgpt.com/", BrowserNavigationCode.AllowedOpenAi)]
+    [InlineData("https://auth.openai.com/authorize", BrowserNavigationCode.AllowedOpenAi)]
+    [InlineData("https://accounts.google.com/o/oauth2/v2/auth", BrowserNavigationCode.AllowedIdentityProvider)]
+    [InlineData("https://appleid.apple.com/auth/authorize", BrowserNavigationCode.AllowedIdentityProvider)]
+    [InlineData("https://login.live.com/oauth20_authorize.srf", BrowserNavigationCode.AllowedIdentityProvider)]
+    [InlineData("https://login.microsoftonline.com/common/oauth2/v2.0/authorize", BrowserNavigationCode.AllowedIdentityProvider)]
+    public void FormalNavigationPolicy_AllowsOfficialTopLevelOrigins(
+        string value,
+        BrowserNavigationCode expectedCode)
+    {
+        var decision = new BrowserNavigationPolicy().Evaluate(value);
+
+        Assert.True(decision.IsAllowed);
+        Assert.Equal(expectedCode, decision.Code);
+    }
+
+    [Theory]
+    [InlineData("not a uri", BrowserNavigationCode.InvalidUri)]
+    [InlineData("http://chatgpt.com/", BrowserNavigationCode.InsecureScheme)]
+    [InlineData("https://chatgpt.com:444/", BrowserNavigationCode.NonDefaultPort)]
+    [InlineData("https://chatgpt.com.evil.example/", BrowserNavigationCode.UntrustedHost)]
+    [InlineData("https://evil-openai.com/", BrowserNavigationCode.UntrustedHost)]
+    [InlineData("https://mail.google.com/", BrowserNavigationCode.UntrustedHost)]
+    [InlineData("https://example.com/", BrowserNavigationCode.UntrustedHost)]
+    public void FormalNavigationPolicy_BlocksUnknownOrUnsafeTopLevelOrigins(
+        string value,
+        BrowserNavigationCode expectedCode)
+    {
+        var decision = new BrowserNavigationPolicy().Evaluate(value);
+
+        Assert.False(decision.IsAllowed);
+        Assert.Equal(expectedCode, decision.Code);
+    }
+
+    [Fact]
+    public void BrowserRestartGate_AllowsOnlyOneAutomaticRecoveryPerUserSession()
+    {
+        var gate = new BrowserRestartGate();
+
+        Assert.True(gate.TryConsumeAutomaticRestart());
+        Assert.False(gate.TryConsumeAutomaticRestart());
+
+        gate.ResetForUserStartedSession();
+
+        Assert.True(gate.TryConsumeAutomaticRestart());
+        Assert.False(gate.TryConsumeAutomaticRestart());
     }
 
     [Fact]

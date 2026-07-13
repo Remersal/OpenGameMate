@@ -4,23 +4,32 @@ using Microsoft.Web.WebView2.Wpf;
 
 namespace OpenGameMate.Browser;
 
-public sealed class ChatGptBrowserSession
+public sealed class ChatGptBrowserSession : IDisposable
 {
     private readonly WebView2 _webView;
     private readonly string _userDataFolder;
     private readonly Func<Uri, Task<bool>> _microphonePermissionPrompt;
     private readonly string? _browserExecutableFolder;
+    private readonly BrowserNavigationPolicy _navigationPolicy;
+    private bool _eventHandlersAttached;
+    private bool _disposed;
 
     public ChatGptBrowserSession(
         WebView2 webView,
         string userDataFolder,
         Func<Uri, Task<bool>> microphonePermissionPrompt,
-        string? browserExecutableFolder = null)
+        string? browserExecutableFolder = null,
+        BrowserNavigationPolicy? navigationPolicy = null)
     {
+        ArgumentNullException.ThrowIfNull(webView);
+        ArgumentException.ThrowIfNullOrWhiteSpace(userDataFolder);
+        ArgumentNullException.ThrowIfNull(microphonePermissionPrompt);
+
         _webView = webView;
-        _userDataFolder = userDataFolder;
+        _userDataFolder = Path.GetFullPath(userDataFolder);
         _microphonePermissionPrompt = microphonePermissionPrompt;
         _browserExecutableFolder = browserExecutableFolder;
+        _navigationPolicy = navigationPolicy ?? new BrowserNavigationPolicy();
     }
 
     public event EventHandler<string>? StatusChanged;
@@ -32,6 +41,8 @@ public sealed class ChatGptBrowserSession
 
     public async Task InitializeAsync()
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         if (IsInitialized)
         {
             return;
@@ -50,12 +61,12 @@ public sealed class ChatGptBrowserSession
         Core.NavigationCompleted += OnNavigationCompleted;
         Core.NewWindowRequested += OnNewWindowRequested;
         Core.PermissionRequested += OnPermissionRequested;
-        Core.ProcessFailed += (_, args) =>
-            RaiseStatus($"WebView2 process failure: {args.ProcessFailedKind}");
+        Core.ProcessFailed += OnProcessFailed;
+        _eventHandlersAttached = true;
 
         Core.Navigate("https://chatgpt.com/");
         RaiseStatus($"WebView2 {Core.Environment.BrowserVersionString} initialized with an isolated user data folder.");
-        RaiseStatus("Phase 0 HTTPS navigation diagnostic mode is active; host restrictions are disabled.");
+        RaiseStatus("Formal fail-closed top-level navigation policy is active.");
     }
 
     public static string? FindFixedRuntimeFolder(string runtimeRoot)
@@ -77,13 +88,9 @@ public sealed class ChatGptBrowserSession
 
     public static bool IsOfficialOpenAiUri(Uri? uri)
     {
-        if (uri is null || uri.Scheme != Uri.UriSchemeHttps)
-        {
-            return false;
-        }
-
-        return IsHostOrSubdomain(uri.Host, "chatgpt.com") ||
-               IsHostOrSubdomain(uri.Host, "openai.com");
+        return uri is { IsAbsoluteUri: true, IsDefaultPort: true } &&
+               uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+               BrowserNavigationPolicy.IsOpenAiHost(uri.Host);
     }
 
     public static bool IsAllowedPhase0NavigationUri(Uri? uri) =>
@@ -92,26 +99,25 @@ public sealed class ChatGptBrowserSession
     public bool IsOnChatGpt()
     {
         return Uri.TryCreate(Core.Source, UriKind.Absolute, out var uri) &&
-               IsHostOrSubdomain(uri.Host, "chatgpt.com");
+               uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) &&
+               uri.IsDefaultPort &&
+               (uri.Host.Equals("chatgpt.com", StringComparison.OrdinalIgnoreCase) ||
+                uri.Host.EndsWith(".chatgpt.com", StringComparison.OrdinalIgnoreCase));
     }
 
     private void OnNavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
     {
-        if (!Uri.TryCreate(args.Uri, UriKind.Absolute, out var uri))
+        var decision = _navigationPolicy.Evaluate(args.Uri);
+        if (decision.IsAllowed)
         {
-            args.Cancel = true;
-            RaiseStatus("Blocked navigation because the target was not an absolute URI.");
-            return;
-        }
-
-        if (IsAllowedPhase0NavigationUri(uri))
-        {
-            RaiseStatus($"Allowed HTTPS navigation host={uri.Host}; diagnostic mode does not restrict hosts.");
+            RaiseStatus($"Allowed top-level navigation host={decision.Host}; policy={decision.Code}.");
             return;
         }
 
         args.Cancel = true;
-        RaiseStatus($"Blocked non-HTTPS navigation host={uri.Host}; scheme={uri.Scheme}. No path or query was recorded.");
+        RaiseStatus(decision.Host is null
+            ? $"Blocked top-level navigation; policy={decision.Code}."
+            : $"Blocked top-level navigation host={decision.Host}; policy={decision.Code}.");
     }
 
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args)
@@ -124,30 +130,27 @@ public sealed class ChatGptBrowserSession
 
         if (Uri.TryCreate(Core.Source, UriKind.Absolute, out var uri))
         {
-            RaiseStatus($"HTTPS page navigation completed; host={uri.Host}.");
+            RaiseStatus($"Page navigation completed; host={uri.Host}.");
             return;
         }
 
-        RaiseStatus("HTTPS page navigation completed.");
+        RaiseStatus("Page navigation completed.");
     }
 
     private void OnNewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs args)
     {
         args.Handled = true;
-        if (Uri.TryCreate(args.Uri, UriKind.Absolute, out var uri) && IsAllowedPhase0NavigationUri(uri))
+        var decision = _navigationPolicy.Evaluate(args.Uri);
+        if (decision.IsAllowed)
         {
-            Core.Navigate(uri.AbsoluteUri);
-            RaiseStatus($"Opened HTTPS new-window target in the isolated WebView2 session; host={uri.Host}.");
+            Core.Navigate(args.Uri);
+            RaiseStatus($"Opened an allowed new-window target in the isolated session; host={decision.Host}.");
             return;
         }
 
-        if (Uri.TryCreate(args.Uri, UriKind.Absolute, out var blockedUri))
-        {
-            RaiseStatus($"Blocked new-window host={blockedUri.Host}; scheme={blockedUri.Scheme}. No path or query was recorded.");
-            return;
-        }
-
-        RaiseStatus("Blocked a new window because the target was not an absolute URI.");
+        RaiseStatus(decision.Host is null
+            ? $"Blocked a new-window target; policy={decision.Code}."
+            : $"Blocked new-window host={decision.Host}; policy={decision.Code}.");
     }
 
     private async void OnPermissionRequested(object? sender, CoreWebView2PermissionRequestedEventArgs args)
@@ -184,9 +187,29 @@ public sealed class ChatGptBrowserSession
         }
     }
 
-    private static bool IsHostOrSubdomain(string host, string expectedHost) =>
-        host.Equals(expectedHost, StringComparison.OrdinalIgnoreCase) ||
-        host.EndsWith($".{expectedHost}", StringComparison.OrdinalIgnoreCase);
+    private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs args) =>
+        RaiseStatus($"WebView2 process failure: {args.ProcessFailedKind}");
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        if (_eventHandlersAttached && _webView.CoreWebView2 is not null)
+        {
+            Core.NavigationStarting -= OnNavigationStarting;
+            Core.NavigationCompleted -= OnNavigationCompleted;
+            Core.NewWindowRequested -= OnNewWindowRequested;
+            Core.PermissionRequested -= OnPermissionRequested;
+            Core.ProcessFailed -= OnProcessFailed;
+            _eventHandlersAttached = false;
+        }
+
+        StatusChanged = null;
+    }
 
     private void RaiseStatus(string message) => StatusChanged?.Invoke(this, message);
 }

@@ -43,7 +43,7 @@ public partial class MainWindow : Window
         UserDataFolderText.Text = "独立用户数据目录：%LocalAppData%\\OpenGameMate\\Phase0\\UserData";
         AddUiEvidence(_browserExecutableFolder is null
             ? "未找到隔离 Fixed Runtime，将使用系统 Evergreen WebView2。"
-            : "已选择隔离 Fixed Runtime；不会使用本机过期的系统 WebView2 131。" );
+            : "已选择隔离 Fixed Runtime；不会使用本机过期的系统 WebView2 131。");
         AddUiEvidence("等待初始化。真实登录、Voice 与网页行为必须由用户手动验证。");
     }
 
@@ -54,6 +54,7 @@ public partial class MainWindow : Window
             if (_browserWindow is null)
             {
                 _browserWindow = new BrowserWindow();
+                _browserWindow.Closing += BrowserWindow_Closing;
                 _browserWindow.Closed += BrowserWindow_Closed;
                 // WebView2 needs a realized WPF host (and therefore an HWND)
                 // before EnsureCoreWebView2Async can complete reliably.
@@ -87,8 +88,16 @@ public partial class MainWindow : Window
 
     private void CloseBrowserButton_Click(object sender, RoutedEventArgs e) => _browserWindow?.Close();
 
+    private void BrowserWindow_Closing(object? sender, CancelEventArgs e) => _browserSession?.Dispose();
+
     private void BrowserWindow_Closed(object? sender, EventArgs e)
     {
+        if (_browserWindow is not null)
+        {
+            _browserWindow.Closing -= BrowserWindow_Closing;
+            _browserWindow.Closed -= BrowserWindow_Closed;
+        }
+
         _browserWindow = null;
         _browserSession = null;
         _adapter = null;
