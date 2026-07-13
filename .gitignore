@@ -1,0 +1,17 @@
+# Local build toolchain (the machine has runtimes but no SDK)
+.dotnet/
+
+# .NET build output
+**/bin/
+**/obj/
+*.user
+*.suo
+.vs/
+
+# Phase 0 runtime artifacts
+artifacts/
+logs/
+userdata/
+*.png
+*.jpg
+*.jpeg

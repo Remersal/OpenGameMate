@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpenGameMate.Core\OpenGameMate.Core.csproj" />
+    <ProjectReference Include="..\OpenGameMate.Capture\OpenGameMate.Capture.csproj" />
+    <ProjectReference Include="..\OpenGameMate.Browser\OpenGameMate.Browser.csproj" />
+    <ProjectReference Include="..\OpenGameMate.Adapters\OpenGameMate.Adapters.csproj" />
+    <ProjectReference Include="..\OpenGameMate.Diagnostics\OpenGameMate.Diagnostics.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,98 @@
+﻿<Window x:Class="OpenGameMate.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:OpenGameMate.App"
+        mc:Ignorable="d"
+        Title="OpenGameMate Phase 0 PoC"
+        Height="820"
+        Width="980"
+        MinHeight="680"
+        MinWidth="840"
+        Closing="Window_Closing">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="180" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0">
+            <TextBlock FontSize="26" FontWeight="SemiBold" Text="OpenGameMate Phase 0" />
+            <TextBlock Margin="0,6,0,14" Foreground="#555"
+                       Text="只验证技术可行性。不会读取回复、聊天记录、Cookie 或登录令牌。" />
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <GroupBox Header="1. WebView2、登录与麦克风" Margin="0,0,0,12">
+                    <StackPanel Margin="12">
+                        <WrapPanel>
+                            <Button x:Name="InitializeBrowserButton" Padding="14,7" Margin="0,0,8,8"
+                                    Click="InitializeBrowserButton_Click" Content="初始化并打开 ChatGPT" />
+                            <Button Padding="14,7" Margin="0,0,8,8" Click="ShowBrowserButton_Click" Content="显示 ChatGPT" />
+                            <Button Padding="14,7" Margin="0,0,8,8" Click="HideBrowserButton_Click" Content="隐藏 ChatGPT" />
+                            <Button Padding="14,7" Margin="0,0,8,8" Click="CloseBrowserButton_Click"
+                                    Content="关闭 ChatGPT（结束语音）" />
+                        </WrapPanel>
+                        <TextBlock x:Name="UserDataFolderText" TextWrapping="Wrap" Foreground="#555" />
+                        <WrapPanel Margin="0,8,0,0">
+                            <Button Padding="12,6" Margin="0,0,8,0" Click="RecordLoginButton_Click"
+                                    Content="我已自行登录（记录人工通过）" />
+                            <Button Padding="12,6" Click="RecordMicrophoneButton_Click"
+                                    Content="我已验证 Voice 麦克风（记录人工通过）" />
+                        </WrapPanel>
+                        <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#8A4B08"
+                                   Text="隐藏窗口不会结束 Voice；请先使用 ChatGPT Voice 的退出按钮。若退出控件无效，可用“关闭 ChatGPT（结束语音）”销毁 WebView2 会话。" />
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="2. 最高优先级：后台无焦点图片与文字" Margin="0,0,0,12">
+                    <StackPanel Margin="12">
+                        <TextBlock TextWrapping="Wrap"
+                                   Text="勾选后点击准备。PoC 会隐藏 ChatGPT 并等待 5 秒；请立即切回游戏或记事本。到时若前台仍是本程序，实验会安全中止。" />
+                        <CheckBox x:Name="PrepareConsentCheckBox" Margin="0,10,0,8"
+                                  Content="我同意把无隐私测试图片和固定测试文字加入当前 ChatGPT 输入区（不会发送）" />
+                        <Button x:Name="PrepareBackgroundButton" HorizontalAlignment="Left" Padding="14,7"
+                                Click="PrepareBackgroundButton_Click" Content="5 秒后后台加入图片和文字" />
+                        <TextBlock Margin="0,10,0,0" TextWrapping="Wrap"
+                                   Text="固定文字：OpenGameMate Phase 0 background input test. Please do not respond; this message is part of a user-approved feasibility test." />
+                        <WrapPanel Margin="0,10,0,0">
+                            <Button Padding="12,6" Margin="0,0,8,0" Click="RecordPreviewButton_Click"
+                                    Content="我已看到输入区图片预览（记录人工通过）" />
+                        </WrapPanel>
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="3. 用户明确确认后的提交实验" Margin="0,0,0,12">
+                    <StackPanel Margin="12">
+                        <TextBlock TextWrapping="Wrap"
+                                   Text="提交会向当前真实对话发送测试内容。仅在你确认输入区内容正确后使用；不会自动重试。" />
+                        <CheckBox x:Name="SubmitConsentCheckBox" Margin="0,10,0,8"
+                                  Content="我确认发送当前测试图片和文字" />
+                        <Button x:Name="SubmitBackgroundButton" HorizontalAlignment="Left" Padding="14,7"
+                                IsEnabled="False" Click="SubmitBackgroundButton_Click"
+                                Content="5 秒后后台触发一次提交" />
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="4. 主显示器截图">
+                    <StackPanel Margin="12">
+                        <TextBlock Text="使用 Windows Graphics Capture 捕获主显示器，保持比例并限制在 1920×1080。只保留一个临时 PNG。" />
+                        <WrapPanel Margin="0,8,0,0">
+                            <Button x:Name="CaptureButton" Padding="14,7" Margin="0,0,8,0"
+                                    Click="CaptureButton_Click" Content="捕获主显示器" />
+                            <Button Padding="14,7" Click="DeleteScreenshotButton_Click" Content="删除临时截图" />
+                        </WrapPanel>
+                        <TextBlock x:Name="CaptureResultText" Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#555" />
+                    </StackPanel>
+                </GroupBox>
+            </StackPanel>
+        </ScrollViewer>
+
+        <GroupBox Grid.Row="2" Header="最小证据日志（不含网页内容）" Margin="0,14,0,0">
+            <ListBox x:Name="EvidenceList" Margin="8" />
+        </GroupBox>
+    </Grid>
+</Window>
