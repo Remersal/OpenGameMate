@@ -46,3 +46,9 @@ Formal v0.1 top-level navigation accepts HTTPS on the default port for OpenAI-ow
 The capture module exposes only primary-display capture. Product output is fixed at a maximum of 1920×1080 with aspect ratio preserved and no upscaling. Callers supply the application temporary directory; the module owns exactly one final PNG and one known in-progress `.tmp` file, serializes capture attempts, atomically replaces the final file after a complete encode, and removes the in-progress file after success or failure.
 
 Capture errors expose stable codes for unsupported systems, missing primary displays, invalid dimensions, timeout, access denial, temporary-file failure and graphics-device failure. Protected content, exclusive-fullscreen black frames and anti-cheat restrictions are reported as compatibility limitations; OpenGameMate does not attempt to bypass them or infer that a dark frame is necessarily an error.
+
+## Scheduling boundary
+
+`AutomaticSendLoop` emits a fixed occurrence every two minutes and has no user-configurable interval. It never performs an immediate retry. Pause and runtime state are supplied as a predicate, so a non-running occurrence is skipped without changing the underlying periodic cadence; manual submissions therefore do not reset automatic timing.
+
+`SubmissionCoordinator` allows one active submission and has no queue. An automatic occurrence yields once before starting so a simultaneous manual request can reserve priority; a running manual submission likewise causes the automatic occurrence to be skipped. An operation that already started is not preempted. `ConversationReminderTracker` raises one reminder after two elapsed hours or 60 successful image submissions, whichever occurs first, and resets only when the user starts a new conversation.
