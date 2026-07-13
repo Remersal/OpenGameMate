@@ -5,6 +5,7 @@
     <ProjectReference Include="..\OpenGameMate.Capture\OpenGameMate.Capture.csproj" />
     <ProjectReference Include="..\OpenGameMate.Browser\OpenGameMate.Browser.csproj" />
     <ProjectReference Include="..\OpenGameMate.Adapters\OpenGameMate.Adapters.csproj" />
+    <ProjectReference Include="..\OpenGameMate.Configuration\OpenGameMate.Configuration.csproj" />
     <ProjectReference Include="..\OpenGameMate.Diagnostics\OpenGameMate.Diagnostics.csproj" />
   </ItemGroup>
 

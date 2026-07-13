@@ -104,3 +104,15 @@
 ---
 *每执行2次查看/浏览器/搜索操作后更新此文件*
 *防止视觉信息丢失*
+
+## v0.1.0 实施决策
+
+- Phase 0 已以提交 `377a506` 冻结，后续真实网页能力结论继续保留为回归基线。
+- 开发文档要求的状态集合固定为：`Idle`、`BrowserReady`、`Ready`、`Running`、`Sending`、`Paused`、`VoiceOnly`、`AdapterError`、`Stopped`。
+- 自动截图周期固定为 2 分钟，v0.1.0 不提供修改设置；同一时间最多一个发送任务，手动优先，普通失败不立即重试。
+- 配置系统必须同时支持 `%LocalAppData%\OpenGameMate\` 安装模式和 `OpenGameMate-Portable\data\` 便携模式，并严格验证 JSON Schema/字段/大小。
+- 诊断日志使用允许字段模型，不接受自由文本网页内容或任意路径，从结构上降低写入回复、账号、Token 或截图内容的风险。
+- 首个正式阶段只实现公共契约、配置、诊断和状态机；浏览器、截图、调度、网页适配及 WPF 产品功能保持未修改。
+- 配置文件最大 64 KiB，使用严格 camelCase JSON、字符串枚举、未知字段拒绝和 SchemaVersion=1；自动截图周期刻意不进入设置模型。
+- 诊断事件最大 8 KiB，按 UTC 日期写 JSONL；模型只有固定布尔/数值/状态/代码字段，不存在任意 `message`、`detail` 或 `path` 字段。
+- 状态机的无效触发不会改变状态；额度错误仅允许从 `Sending` 进入 `VoiceOnly`，适配恢复必须由 `AdapterRecovered` 显式进入 `BrowserReady`。
