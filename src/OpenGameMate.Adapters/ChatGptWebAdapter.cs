@@ -7,6 +7,10 @@ namespace OpenGameMate.Adapters;
 
 public interface IAiWebAdapter
 {
+    Task<TextPreparationResult> PrepareTextAsync(
+        string message,
+        CancellationToken cancellationToken = default);
+
     Task<InputPreparationResult> PrepareInputAsync(
         string imagePath,
         string message,
@@ -64,7 +68,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             return new(false, false, false, "not-on-chatgpt", WebAdapterStatus.NotReady);
         }
 
-        if (string.IsNullOrWhiteSpace(message) || message.Length > MaximumMessageCharacters)
+        if (!IsMessageValid(message))
         {
             return new(false, false, false, "message-invalid", WebAdapterStatus.InvalidInput);
         }
@@ -183,53 +187,10 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             return new(false, false, false, GetCode(locateFileInput), WebAdapterStatus.AdapterInvalid);
         }
 
-        var messageJson = JsonSerializer.Serialize(message);
-        var inputResult = await EvaluateAsync(
-            $$"""
-            (() => {
-              const fileInput = document.querySelector('input[{{FileInputMarker}}="true"]');
-              const composers = [...document.querySelectorAll({{composerSelectorJson}})]
-                .filter(element => !element.hasAttribute('disabled'));
-              if (composers.length !== 1) {
-                return { code: 'composer-count', count: composers.length,
-                  fileSelected: fileInput?.files?.length === 1, textInserted: false };
-              }
-
-              const composer = composers[0];
-              const text = {{messageJson}};
-              if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
-                const prototype = composer instanceof HTMLTextAreaElement
-                  ? HTMLTextAreaElement.prototype
-                  : HTMLInputElement.prototype;
-                const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
-                if (!setter) return { code: 'native-value-setter-missing', fileSelected: true, textInserted: false };
-                setter.call(composer, text);
-              } else if (composer.isContentEditable) {
-                const paragraph = document.createElement('p');
-                paragraph.textContent = text;
-                composer.replaceChildren(paragraph);
-              } else {
-                return { code: 'unsupported-composer',
-                  fileSelected: fileInput?.files?.length === 1, textInserted: false };
-              }
-
-              composer.dispatchEvent(new InputEvent('input', {
-                bubbles: true,
-                inputType: 'insertText',
-                data: text
-              }));
-              const actual = composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement
-                ? composer.value
-                : composer.innerText;
-              return {
-                code: 'ok',
-                fileSelected: fileInput?.files?.length === 1,
-                textInserted: actual === text
-              };
-            })()
-            """);
+        var inputResult = await InsertTextAsync(message, composerSelectorJson);
 
         await Task.Delay(750, cancellationToken);
+        var messageJson = JsonSerializer.Serialize(message);
         var probeResult = await EvaluateAsync(
             $$"""
             (() => {
@@ -263,6 +224,42 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             (GetBoolean(probeResult, "textInserted") || GetBoolean(inputResult, "textInserted"))
                 ? WebAdapterStatus.Succeeded
                 : WebAdapterStatus.AdapterInvalid);
+    }
+
+    public async Task<TextPreparationResult> PrepareTextAsync(
+        string message,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_session.IsInitialized || !_session.IsOnChatGpt())
+        {
+            return new(false, "not-on-chatgpt", WebAdapterStatus.NotReady);
+        }
+
+        if (!IsMessageValid(message))
+        {
+            return new(false, "message-invalid", WebAdapterStatus.InvalidInput);
+        }
+
+        try
+        {
+            var composerSelectorJson = JsonSerializer.Serialize(_rules.ComposerSelector);
+            var result = await InsertTextAsync(message, composerSelectorJson);
+            var inserted = GetBoolean(result, "textInserted");
+            return new(
+                inserted,
+                GetCode(result),
+                inserted ? WebAdapterStatus.Succeeded : WebAdapterStatus.AdapterInvalid);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or JsonException or IOException or
+                UnauthorizedAccessException or COMException)
+        {
+            return new(false, "adapter-operation-failed", WebAdapterStatus.AdapterInvalid);
+        }
     }
 
     public async Task<SubmissionResult> SubmitAsync(CancellationToken cancellationToken = default)
@@ -369,6 +366,58 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             new { expression, returnByValue = true, awaitPromise = true });
         return ParseRuntimeEvaluateResponse(response.RootElement);
     }
+
+    private async Task<JsonElement> InsertTextAsync(string message, string composerSelectorJson)
+    {
+        var messageJson = JsonSerializer.Serialize(message);
+        return await EvaluateAsync(
+            $$"""
+            (() => {
+              const fileInput = document.querySelector('input[{{FileInputMarker}}="true"]');
+              const composers = [...document.querySelectorAll({{composerSelectorJson}})]
+                .filter(element => !element.hasAttribute('disabled'));
+              if (composers.length !== 1) {
+                return { code: 'composer-count', count: composers.length,
+                  fileSelected: fileInput?.files?.length === 1, textInserted: false };
+              }
+
+              const composer = composers[0];
+              const text = {{messageJson}};
+              if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
+                const prototype = composer instanceof HTMLTextAreaElement
+                  ? HTMLTextAreaElement.prototype
+                  : HTMLInputElement.prototype;
+                const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+                if (!setter) return { code: 'native-value-setter-missing', fileSelected: true, textInserted: false };
+                setter.call(composer, text);
+              } else if (composer.isContentEditable) {
+                const paragraph = document.createElement('p');
+                paragraph.textContent = text;
+                composer.replaceChildren(paragraph);
+              } else {
+                return { code: 'unsupported-composer',
+                  fileSelected: fileInput?.files?.length === 1, textInserted: false };
+              }
+
+              composer.dispatchEvent(new InputEvent('input', {
+                bubbles: true,
+                inputType: 'insertText',
+                data: text
+              }));
+              const actual = composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement
+                ? composer.value
+                : composer.innerText;
+              return {
+                code: 'ok',
+                fileSelected: fileInput?.files?.length === 1,
+                textInserted: actual === text
+              };
+            })()
+            """);
+    }
+
+    private static bool IsMessageValid(string message) =>
+        !string.IsNullOrWhiteSpace(message) && message.Length <= MaximumMessageCharacters;
 
     public static JsonElement ParseRuntimeEvaluateResponse(string responseJson)
     {

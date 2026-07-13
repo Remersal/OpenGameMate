@@ -134,6 +134,18 @@ public class Phase0UnitTests
         Assert.Equal(expected, result.ImageAdded);
     }
 
+    [Fact]
+    public void TextPreparationResult_RequiresAnExplicitSuccessfulInsertion()
+    {
+        var result = new OpenGameMate.Core.TextPreparationResult(
+            true,
+            "ok",
+            OpenGameMate.Core.WebAdapterStatus.Succeeded);
+
+        Assert.True(result.TextInserted);
+        Assert.Equal(OpenGameMate.Core.WebAdapterStatus.Succeeded, result.Status);
+    }
+
     [Theory]
     [InlineData(3840, 2160, 1920, 1080)]
     [InlineData(2560, 1440, 1920, 1080)]

@@ -28,6 +28,11 @@ public sealed record InputPreparationResult(
     public bool ImageAdded => FileInputSelected || AttachmentPreviewDetected;
 }
 
+public sealed record TextPreparationResult(
+    bool TextInserted,
+    string Code,
+    WebAdapterStatus Status);
+
 public sealed record SubmissionResult(
     bool TriggerInvoked,
     bool ComposerCleared,
