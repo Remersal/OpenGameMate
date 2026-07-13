@@ -89,6 +89,36 @@ public sealed class ConfigurationTests
         }
     }
 
+    [Fact]
+    public async Task JsonStore_PersistsRoleInitializationWithoutRuntimeState()
+    {
+        var testDirectory = CreateTestDirectory();
+        var settingsFile = Path.Combine(testDirectory, "settings.json");
+        try
+        {
+            var store = new JsonAppSettingsStore(settingsFile);
+            var settings = new OpenGameMateSettings
+            {
+                Language = AppLanguage.English,
+                RolePromptSent = true,
+                ShowPrivacyWarningOnFirstStart = false,
+            };
+
+            await store.SaveAsync(settings);
+            var loaded = await store.LoadAsync();
+
+            Assert.True(loaded.RolePromptSent);
+            Assert.False(loaded.ShowPrivacyWarningOnFirstStart);
+            Assert.Equal(AppLanguage.English, loaded.Language);
+        }
+        finally
+        {
+            DeleteSingleFile(settingsFile);
+            DeleteSingleFile(settingsFile + ".tmp");
+            DeleteEmptyDirectory(testDirectory);
+        }
+    }
+
     private static string CreateTestDirectory()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"ogm-config-{Guid.NewGuid():N}");

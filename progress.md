@@ -41,6 +41,18 @@
 - 已实现官方 GitHub 精确来源、HTTPS/default port、最终重定向 URI、64 KiB 文档、32 KiB 负载、严格 Schema/字段和 RSA-PSS/SHA-256 签名验证；任何失败回退内置规则。
 - 当前仓库无官方 GitHub remote 和维护者签名公钥，故远程检查保持安全禁用且不发网络请求；不得在客户端仓库生成或保存私钥。
 - Release 构建成功，75/75 测试通过，本阶段文件格式检查通过；真实网页路径沿用 Phase 0 已通过证据，未自动启动或发送。
+- 已创建独立提交 `b6aa636 feat: add fail-closed ChatGPT adapter rules`。
+
+### v6 阶段：WPF 界面与集成
+- **状态：** complete
+- 开始组合配置、诊断、状态机、浏览器、截图、调度和网页适配；继续禁止自动启动程序或捕获桌面。
+- 开发文档中的 WebView2 数据一键清除与仓库“禁止批量删除目录”规则冲突；本阶段不实现递归删除，只提供数据目录位置和安全手动处理说明。
+- 已实现中英主界面、独立 ChatGPT 窗口、托盘、完整状态展示、用户控制的 Voice/角色初始化、开始/立即发送/暂停/恢复/停止和一次浏览器恢复。
+- 已把截图、适配、提交、额度/适配降级、会话提醒和隐私安全诊断串入状态机；启动只恢复设置，不恢复截图或运行状态。
+- 已补齐 MIT、README、PRIVACY、SECURITY、CONTRIBUTING、CHANGELOG、CI、双语 Issue 模板、测试计划、发布说明、便携发布脚本和 Inno Setup 定义。
+- Release 构建成功，84/84 测试通过，全仓格式检查通过，便携发布与 ZIP 成功；未启动应用、未捕获桌面、未登录或发送真实消息。
+- 便携 ZIP：`artifacts/release/OpenGameMate-v0.1.0-win-x64.zip`，SHA-256 `479C9B1EC7448C2E8F93F0F4646BD85FCC70DDED8563C2672BF136AB854EE821`。
+- 本机未安装 Inno Setup，因此只验证了安装器定义和便携输入，未伪造安装器构建结果。
 
 ## 会话：2026-07-13
 

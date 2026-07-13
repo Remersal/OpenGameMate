@@ -1,0 +1,35 @@
+name: Bug report (English)
+description: Report a reproducible issue without accounts, tokens, cookies, chats, or private screenshots
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "Remove private data from logs. Never upload the WebView2 user-data directory."
+  - type: input
+    id: version
+    attributes:
+      label: OpenGameMate and Windows versions
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: fullscreen
+    attributes:
+      label: Game display mode
+      options:
+        - Borderless or windowed
+        - Exclusive fullscreen
+        - Not game-related
+    validations:
+      required: true

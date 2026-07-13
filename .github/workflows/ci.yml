@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore
+        run: dotnet restore .\OpenGameMate.sln
+      - name: Build
+        run: dotnet build .\OpenGameMate.sln -c Release --no-restore
+      - name: Test and configuration validation
+        run: dotnet test .\tests\OpenGameMate.Tests\OpenGameMate.Tests.csproj -c Release --no-build
+      - name: Format
+        run: dotnet format .\OpenGameMate.sln --verify-no-changes --no-restore
+
+      # CI intentionally does not sign in to ChatGPT, start Voice, capture a
+      # desktop, send a real message, or create a release.

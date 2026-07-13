@@ -60,3 +60,11 @@ Capture errors expose stable codes for unsupported systems, missing primary disp
 Adapter rules are strict JSON containing only version tokens and length-bounded CSS selectors. Remote documents use a strict signed envelope: the base64 payload is verified byte-for-byte with RSA-PSS/SHA-256 before its strict schema and allowlisted fields are accepted. The downloader limits the document and payload sizes, requires HTTPS on the default port, and pins the exact `raw.githubusercontent.com/<official-owner>/<official-repository>/main/adapter-rules/chatgpt-v1.signed.json` path, including the final URI after redirects. Every rejection falls back to built-in rules.
 
 The repository currently has no declared official GitHub remote or maintainer-owned signing public key. Until maintainers provide those trust anchors, product composition must pass no verifier; the loader then returns `RemoteDisabled` without making a network request and uses built-in rules. A signing key must never be generated or stored in the client repository.
+
+## WPF composition boundary
+
+The App project is the composition root. Startup displays only the main window and restores settings, never capture or runtime state. User actions create the independent ChatGPT window, confirm Voice, optionally send role text, acknowledge full-display privacy risk, and start the scheduler. WebView2 work is dispatched on the WPF thread; fixed timing remains in Core.
+
+Submission composition is capture → prepare image/text → verify attachment/text → invoke one send control → verify composer/attachment state → delete the local PNG. `QuotaReached` cancels automatic work and enters `VoiceOnly`; `AdapterInvalid` cancels work and enters `AdapterError`; ordinary failures return to `Running` without an immediate retry. No branch reads a model reply.
+
+The tray mirrors show/hide browser, send-now, pause/resume, stop, and exit. Closing the browser during a run consumes at most one background recovery and requires explicit Voice confirmation before resuming. Diagnostics export belongs to the Diagnostics module and packages only allowlisted JSONL filenames after a user-selected destination.

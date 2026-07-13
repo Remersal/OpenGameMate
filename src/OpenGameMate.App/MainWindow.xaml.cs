@@ -1,331 +1,1031 @@
-﻿using System.Text;
-using System.Windows;
+using System;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO;
-using System.Windows.Interop;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows;
+using Microsoft.Win32;
 using OpenGameMate.Adapters;
 using OpenGameMate.Browser;
 using OpenGameMate.Capture;
+using OpenGameMate.Configuration;
 using OpenGameMate.Core;
 using OpenGameMate.Diagnostics;
 
 namespace OpenGameMate.App;
 
-/// <summary>
-/// Interaction logic for MainWindow.xaml
-/// </summary>
 public partial class MainWindow : Window
 {
-    private const string TestMessage =
-        "OpenGameMate Phase 0 background input test. Please do not respond; this message is part of a user-approved feasibility test.";
+    private readonly AppDataPaths _paths;
+    private readonly IAppSettingsStore _settingsStore;
+    private readonly IDiagnosticLogger _logger;
+    private readonly IPrimaryDisplayCapture _capture;
+    private readonly GameMateStateMachine _stateMachine = new();
+    private readonly BrowserRestartGate _browserRestartGate = new();
+    private readonly AutomaticSendLoop _automaticSendLoop = new();
+    private readonly SubmissionCoordinator _submissionCoordinator;
 
-    private readonly string _userDataFolder;
-    private readonly string? _browserExecutableFolder;
-    private readonly Phase0EvidenceRecorder _recorder;
-    private readonly PrimaryDisplayCapture _primaryDisplayCapture = new();
+    private OpenGameMateSettings _settings = new();
     private BrowserWindow? _browserWindow;
     private ChatGptBrowserSession? _browserSession;
     private IAiWebAdapter? _adapter;
-    private string? _currentTestImagePath;
+    private ConversationReminderTracker? _reminderTracker;
+    private TrayIconController? _trayIcon;
+    private CancellationTokenSource? _runCancellation;
+    private Task? _automaticLoopTask;
+    private bool _loaded;
     private bool _isExiting;
+    private bool _expectedBrowserClose;
+    private bool _resumeAfterBrowserRecovery;
+    private bool _auxiliaryOperation;
 
-    public MainWindow()
+    public MainWindow(AppDataPaths paths)
     {
+        ArgumentNullException.ThrowIfNull(paths);
+        _paths = paths;
+        _settingsStore = new JsonAppSettingsStore(paths.SettingsFile);
+        _logger = new JsonLineDiagnosticLogger(paths.LogsDirectory);
+        _capture = new PrimaryDisplayCapture(paths.TemporaryDirectory);
+        _submissionCoordinator = new SubmissionCoordinator(DispatchSubmissionAsync);
         InitializeComponent();
-        var localRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "OpenGameMate",
-            "Phase0");
-        _userDataFolder = Path.Combine(localRoot, "UserData");
-        _browserExecutableFolder = ChatGptBrowserSession.FindFixedRuntimeFolder(
-            Path.Combine(localRoot, "WebView2Runtime"));
-        _recorder = new Phase0EvidenceRecorder(Path.Combine(localRoot, "phase0-results.jsonl"));
-        UserDataFolderText.Text = "独立用户数据目录：%LocalAppData%\\OpenGameMate\\Phase0\\UserData";
-        AddUiEvidence(_browserExecutableFolder is null
-            ? "未找到隔离 Fixed Runtime，将使用系统 Evergreen WebView2。"
-            : "已选择隔离 Fixed Runtime；不会使用本机过期的系统 WebView2 131。");
-        AddUiEvidence("等待初始化。真实登录、Voice 与网页行为必须由用户手动验证。");
     }
 
-    private async void InitializeBrowserButton_Click(object sender, RoutedEventArgs e)
+    private bool IsChinese => _settings.Language switch
+    {
+        AppLanguage.ChineseSimplified => true,
+        AppLanguage.English => false,
+        _ => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName.Equals(
+            "zh",
+            StringComparison.OrdinalIgnoreCase),
+    };
+
+    private CompanionPromptLanguage PromptLanguage => IsChinese
+        ? CompanionPromptLanguage.ChineseSimplified
+        : CompanionPromptLanguage.English;
+
+    private string T(string chinese, string english) => IsChinese ? chinese : english;
+
+    private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
         try
         {
-            if (_browserWindow is null)
-            {
-                _browserWindow = new BrowserWindow();
-                _browserWindow.Closing += BrowserWindow_Closing;
-                _browserWindow.Closed += BrowserWindow_Closed;
-                // WebView2 needs a realized WPF host (and therefore an HWND)
-                // before EnsureCoreWebView2Async can complete reliably.
-                _browserWindow.ShowForUser();
-                _browserSession = new ChatGptBrowserSession(
-                    _browserWindow.WebView,
-                    _userDataFolder,
-                    PromptForMicrophoneAsync,
-                    _browserExecutableFolder);
-                _browserSession.StatusChanged += (_, message) => Dispatcher.Invoke(() => AddUiEvidence(message));
-                await _browserSession.InitializeAsync();
-                _adapter = new ChatGptWebAdapter(_browserSession);
-                await RecordAsync("webview2-initialization", ValidationStatus.Passed,
-                    $"Isolated UDF initialized; official ChatGPT navigation requested; runtime={_browserSession.Core.Environment.BrowserVersionString}; fixedRuntime={_browserExecutableFolder is not null}.");
-            }
+            _settings = await _settingsStore.LoadAsync();
+        }
+        catch (ConfigurationValidationException exception)
+        {
+            _settings = new OpenGameMateSettings();
+            await SafeLogAsync(
+                "settings.load-failed",
+                DiagnosticLevel.Error,
+                errorCode: "invalid-settings",
+                exceptionType: exception.GetType().Name);
+            MessageBox.Show(
+                T(
+                    "设置文件无效，本次将使用默认设置且不会覆盖原文件。",
+                    "The settings file is invalid. Defaults will be used without overwriting it."),
+                "OpenGameMate",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
 
-            _browserWindow.ShowForUser();
-            InitializeBrowserButton.IsEnabled = false;
+        SelectLanguageItem(_settings.Language);
+        ApplyLocalization();
+        CreateTrayIcon();
+        _loaded = true;
+        UpdateUi();
+        AddActivity(T("应用已启动；不会自动打开浏览器或捕获桌面。", "Started without opening a browser or capturing the desktop."));
+        await SafeLogAsync("app.started", DiagnosticLevel.Information, success: true);
+    }
+
+    private void CreateTrayIcon()
+    {
+        _trayIcon = new TrayIconController(
+            () => OnUi(ShowMainWindow),
+            () => OnUi(() => _browserWindow?.ShowForUser()),
+            () => OnUi(() => _browserWindow?.Hide()),
+            () => OnUi(async () => await SendNowAsync()),
+            () => OnUi(PauseOrResume),
+            () => OnUi(StopRun),
+            () => OnUi(ExitApplication));
+    }
+
+    private async void LanguageComboBox_SelectionChanged(
+        object sender,
+        System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (!_loaded || LanguageComboBox.SelectedItem is not System.Windows.Controls.ComboBoxItem item ||
+            item.Tag is not string tag || !Enum.TryParse<AppLanguage>(tag, out var language))
+        {
+            return;
+        }
+
+        _settings = _settings with { Language = language };
+        ApplyLocalization();
+        UpdateUi();
+        try
+        {
+            await _settingsStore.SaveAsync(_settings);
         }
         catch (Exception exception)
         {
-            AddUiEvidence($"初始化失败：{exception.GetType().Name} — {exception.Message}");
-            await RecordAsync("webview2-initialization", ValidationStatus.Failed,
-                $"Initialization failed: {exception.GetType().Name}.");
+            await ReportExceptionAsync("settings.save-failed", "settings-save", exception);
         }
     }
+
+    private void SelectLanguageItem(AppLanguage language)
+    {
+        foreach (var entry in LanguageComboBox.Items.OfType<System.Windows.Controls.ComboBoxItem>())
+        {
+            if (entry.Tag is string tag && tag.Equals(language.ToString(), StringComparison.Ordinal))
+            {
+                LanguageComboBox.SelectedItem = entry;
+                return;
+            }
+        }
+    }
+
+    private void ApplyLocalization()
+    {
+        Title = "OpenGameMate v0.1.0";
+        SubtitleText.Text = T(
+            "让 ChatGPT Voice 根据游戏画面自然陪聊",
+            "Natural ChatGPT Voice companionship grounded in your game screen");
+        PrivacySummaryText.Text = T(
+            "OpenGameMate 只在你开始后捕获整个主显示器。它不读取回复、聊天记录、Cookie、Token 或音频。",
+            "OpenGameMate captures the entire primary display only after you start. It does not read replies, history, cookies, tokens, or audio.");
+        BrowserGroup.Header = T("1. ChatGPT 与 Voice", "1. ChatGPT and Voice");
+        OpenBrowserButton.Content = T("打开 ChatGPT", "Open ChatGPT");
+        ShowBrowserButton.Content = T("显示", "Show");
+        HideBrowserButton.Content = T("隐藏", "Hide");
+        CloseBrowserButton.Content = T("关闭并结束 Voice", "Close and end Voice");
+        BrowserInstructionText.Text = T(
+            "请在独立窗口自行登录并开启 Voice，然后回到这里确认。",
+            "Sign in and start Voice in the separate window, then confirm here.");
+        ConfirmVoiceButton.Content = T("我已开启 Voice", "I started Voice");
+        RoleGroup.Header = T("2. 可选角色初始化", "2. Optional role initialization");
+        RoleInstructionText.Text = T(
+            "首次使用可由你明确发送一次完整陪玩设定；不会自动发送。",
+            "You may explicitly send the full companion role once; it is never sent automatically.");
+        SendFullRoleButton.Content = T("发送完整设定", "Send full role");
+        SendShortRoleButton.Content = T("发送简短提醒", "Send short reminder");
+        NewConversationButton.Content = T("已新建对话，不发送提醒", "New chat created; send nothing");
+        RoleStatusText.Text = _settings.RolePromptSent
+            ? T("已记录完整角色设定发送成功。", "Full role initialization was recorded as sent.")
+            : T("尚未记录角色初始化。", "Role initialization has not been recorded.");
+        RunGroup.Header = T("3. 陪玩控制", "3. Companion controls");
+        RunInstructionText.Text = T(
+            "开始后每 2 分钟自动发送一次主显示器截图。手动发送不重置计时，普通失败不立即重试。",
+            "After starting, the primary display is sent every two minutes. Manual sends do not reset timing; ordinary failures are not retried immediately.");
+        StartButton.Content = T("开始陪玩", "Start");
+        SendNowButton.Content = T("立即发送", "Send now");
+        StopButton.Content = T("停止", "Stop");
+        MaintenanceGroup.Header = T("4. 数据、规则与诊断", "4. Data, rules, and diagnostics");
+        RetryAdapterButton.Content = T("重新检查内置规则", "Retry built-in rules");
+        ExportDiagnosticsButton.Content = T("导出诊断包", "Export diagnostics");
+        OpenDataFolderButton.Content = T("打开数据目录", "Open data folder");
+        BrowserDataHelpButton.Content = T("浏览器数据清理说明", "Browser-data cleanup help");
+        RemoteRulesText.Text = T(
+            "远程规则：未配置官方仓库和签名公钥，安全使用内置规则。",
+            "Remote rules: no official repository and signing key are configured; built-in rules are used safely.");
+        ActivityGroup.Header = T("活动记录（不含网页内容）", "Activity (no webpage content)");
+    }
+
+    private async void OpenBrowserButton_Click(object sender, RoutedEventArgs e) =>
+        await EnsureBrowserAsync(activate: true, automaticRecovery: false);
 
     private void ShowBrowserButton_Click(object sender, RoutedEventArgs e) => _browserWindow?.ShowForUser();
 
     private void HideBrowserButton_Click(object sender, RoutedEventArgs e) => _browserWindow?.Hide();
 
-    private void CloseBrowserButton_Click(object sender, RoutedEventArgs e) => _browserWindow?.Close();
+    private void CloseBrowserButton_Click(object sender, RoutedEventArgs e)
+    {
+        _expectedBrowserClose = true;
+        _browserWindow?.Close();
+    }
+
+    private async Task EnsureBrowserAsync(bool activate, bool automaticRecovery)
+    {
+        if (_browserWindow is not null)
+        {
+            _browserWindow.ShowForUser(activate);
+            return;
+        }
+
+        try
+        {
+            _browserWindow = new BrowserWindow();
+            _browserWindow.Closing += BrowserWindow_Closing;
+            _browserWindow.Closed += BrowserWindow_Closed;
+            _browserWindow.ShowForUser(activate);
+
+            _browserSession = new ChatGptBrowserSession(
+                _browserWindow.WebView,
+                _paths.WebViewUserDataDirectory,
+                PromptForMicrophoneAsync,
+                FindBrowserRuntime());
+            _browserSession.StatusChanged += BrowserSession_StatusChanged;
+            await _browserSession.InitializeAsync();
+            _adapter = new ChatGptWebAdapter(_browserSession, ChatGptAdapterRules.BuiltIn);
+
+            if (_stateMachine.State == GameMateState.Idle)
+            {
+                ApplyTrigger(GameMateTrigger.BrowserInitialized);
+            }
+
+            AddActivity(automaticRecovery
+                ? T("ChatGPT 已自动重开一次；请重新开启 Voice 并确认。", "ChatGPT was reopened once. Restart Voice and confirm.")
+                : T("ChatGPT 已打开；登录和 Voice 由你控制。", "ChatGPT opened; sign-in and Voice remain under your control."));
+            await SafeLogAsync("browser.initialized", DiagnosticLevel.Information, success: true);
+        }
+        catch (Exception exception)
+        {
+            await ReportExceptionAsync("browser.initialization-failed", "browser-init", exception);
+            CleanupFailedBrowserInitialization();
+        }
+
+        UpdateUi();
+    }
+
+    private string? FindBrowserRuntime()
+    {
+        var productRuntime = ChatGptBrowserSession.FindFixedRuntimeFolder(
+            Path.Combine(_paths.RootDirectory, "WebView2Runtime"));
+        if (productRuntime is not null)
+        {
+            return productRuntime;
+        }
+
+        if (_paths.Mode != AppDataMode.Installed)
+        {
+            return null;
+        }
+
+        return ChatGptBrowserSession.FindFixedRuntimeFolder(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "OpenGameMate",
+            "Phase0",
+            "WebView2Runtime"));
+    }
+
+    private void CleanupFailedBrowserInitialization()
+    {
+        _expectedBrowserClose = true;
+        if (_browserWindow is not null)
+        {
+            _browserWindow.Close();
+        }
+
+        _browserSession?.Dispose();
+        _browserSession = null;
+        _browserWindow = null;
+        _adapter = null;
+    }
+
+    private void BrowserSession_StatusChanged(object? sender, string message) =>
+        Dispatcher.Invoke(() => AddActivity(message));
 
     private void BrowserWindow_Closing(object? sender, CancelEventArgs e) => _browserSession?.Dispose();
 
     private void BrowserWindow_Closed(object? sender, EventArgs e)
     {
+        var shouldRecover = !_isExiting && !_expectedBrowserClose && IsRunRelatedState(_stateMachine.State);
+        _runCancellation?.Cancel();
+
         if (_browserWindow is not null)
         {
             _browserWindow.Closing -= BrowserWindow_Closing;
             _browserWindow.Closed -= BrowserWindow_Closed;
         }
 
+        if (_browserSession is not null)
+        {
+            _browserSession.StatusChanged -= BrowserSession_StatusChanged;
+            _browserSession.Dispose();
+        }
+
         _browserWindow = null;
         _browserSession = null;
         _adapter = null;
-        InitializeBrowserButton.IsEnabled = true;
-        if (!_isExiting)
+        if (_stateMachine.CanApply(GameMateTrigger.BrowserClosed))
         {
-            AddUiEvidence("ChatGPT WebView2 已关闭；活动语音和麦克风会话已终止。独立用户数据目录仍保留，可重新初始化并继续登录状态。");
-        }
-    }
-
-    private async void RecordLoginButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_browserSession?.IsOnChatGpt() != true)
-        {
-            AddUiEvidence("无法记录登录：WebView2 尚未位于 chatgpt.com。");
-            return;
+            ApplyTrigger(GameMateTrigger.BrowserClosed);
         }
 
-        await RecordAsync("user-login", ValidationStatus.Passed,
-            "User manually confirmed login in the isolated official ChatGPT WebView2 session.");
-    }
-
-    private async void RecordMicrophoneButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (_browserSession?.IsOnChatGpt() != true)
+        _expectedBrowserClose = false;
+        if (shouldRecover && _browserRestartGate.TryConsumeAutomaticRestart())
         {
-            AddUiEvidence("无法记录麦克风：WebView2 尚未位于 chatgpt.com。");
-            return;
+            _resumeAfterBrowserRecovery = true;
+            _trayIcon?.Notify(
+                "OpenGameMate",
+                T("ChatGPT 已关闭，正在后台重开一次。请重新开启 Voice。", "ChatGPT closed. Reopening once; restart Voice."));
+            OnUi(async () => await EnsureBrowserAsync(activate: false, automaticRecovery: true));
+        }
+        else if (shouldRecover)
+        {
+            AddActivity(T("ChatGPT 再次关闭；不会继续自动重开。", "ChatGPT closed again; no further automatic restart."));
         }
 
-        await RecordAsync("voice-microphone", ValidationStatus.Passed,
-            "User manually confirmed Voice microphone operation; no audio was captured by OpenGameMate.");
-    }
-
-    private async void PrepareBackgroundButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (PrepareConsentCheckBox.IsChecked != true ||
-            _adapter is null ||
-            _browserWindow is null ||
-            _browserSession?.IsOnChatGpt() != true)
-        {
-            AddUiEvidence("准备实验未启动：请先初始化、登录、打开对话并勾选同意。");
-            return;
-        }
-
-        PrepareBackgroundButton.IsEnabled = false;
-        try
-        {
-            _currentTestImagePath = TestImageFactory.Create();
-            _browserWindow.Hide();
-            AddUiEvidence("倒计时 5 秒：现在切换到游戏或记事本，保持鼠标不动。");
-            await Task.Delay(TimeSpan.FromSeconds(5));
-
-            var browserHandle = new WindowInteropHelper(_browserWindow).Handle.ToInt64();
-            var mainHandle = new WindowInteropHelper(this).Handle.ToInt64();
-            var before = NativeFocusProbe.Capture();
-            if (before.ForegroundWindow == browserHandle || before.ForegroundWindow == mainHandle)
-            {
-                await RecordAsync("background-input", ValidationStatus.Failed,
-                    "Aborted before DOM mutation because an OpenGameMate window was still foreground.");
-                AddUiEvidence("实验已安全中止：倒计时结束时前台仍是 OpenGameMate 窗口。");
-                return;
-            }
-
-            var result = await _adapter.PrepareInputAsync(_currentTestImagePath, TestMessage);
-            var after = NativeFocusProbe.Capture();
-            var focusStable = before.SameForegroundAndCursor(after);
-            var passed = result.ImageAdded && result.TextInserted && focusStable;
-            var detail =
-                $"fileSelected={result.FileInputSelected}; previewDetected={result.AttachmentPreviewDetected}; " +
-                $"textInserted={result.TextInserted}; focusAndCursorStable={focusStable}; code={result.Code}.";
-            await RecordAsync("background-input", passed ? ValidationStatus.Passed : ValidationStatus.Failed, detail);
-
-            AddUiEvidence(passed
-                ? "后台加入实验通过自动检查：图片已加入输入区、文字已写入、前台焦点和鼠标未变化。请显示 ChatGPT 人工确认图片预览。"
-                : $"后台加入实验失败：{detail}");
-            SubmitBackgroundButton.IsEnabled = passed;
-        }
-        catch (Exception exception)
-        {
-            await RecordAsync("background-input", ValidationStatus.Failed,
-                $"Unhandled failure: {exception.GetType().Name}.");
-            AddUiEvidence($"后台加入实验异常：{exception.GetType().Name} — {exception.Message}");
-        }
-        finally
-        {
-            PrepareBackgroundButton.IsEnabled = true;
-        }
-    }
-
-    private async void RecordPreviewButton_Click(object sender, RoutedEventArgs e)
-    {
-        await RecordAsync("attachment-preview", ValidationStatus.Passed,
-            "User manually confirmed that the test image preview is visible in the ChatGPT input area.");
-    }
-
-    private async void SubmitBackgroundButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (SubmitConsentCheckBox.IsChecked != true || _adapter is null || _browserWindow is null)
-        {
-            AddUiEvidence("提交实验未启动：需要明确勾选发送确认。");
-            return;
-        }
-
-        SubmitBackgroundButton.IsEnabled = false;
-        try
-        {
-            _browserWindow.Hide();
-            AddUiEvidence("提交倒计时 5 秒：现在切回游戏或记事本，保持鼠标不动。");
-            await Task.Delay(TimeSpan.FromSeconds(5));
-
-            var browserHandle = new WindowInteropHelper(_browserWindow).Handle.ToInt64();
-            var mainHandle = new WindowInteropHelper(this).Handle.ToInt64();
-            var before = NativeFocusProbe.Capture();
-            if (before.ForegroundWindow == browserHandle || before.ForegroundWindow == mainHandle)
-            {
-                await RecordAsync("background-submit", ValidationStatus.Failed,
-                    "Aborted before submission because an OpenGameMate window was still foreground.");
-                AddUiEvidence("提交实验已安全中止：倒计时结束时前台仍是 OpenGameMate 窗口。");
-                return;
-            }
-
-            var result = await _adapter.SubmitAsync();
-            var after = NativeFocusProbe.Capture();
-            var focusStable = before.SameForegroundAndCursor(after);
-            var submittedStateObserved = result.ComposerCleared || result.AttachmentCleared;
-            var passed = result.TriggerInvoked && submittedStateObserved && focusStable;
-            var detail =
-                $"triggerInvoked={result.TriggerInvoked}; composerCleared={result.ComposerCleared}; " +
-                $"attachmentCleared={result.AttachmentCleared}; focusAndCursorStable={focusStable}; code={result.Code}.";
-            await RecordAsync("background-submit", passed ? ValidationStatus.Passed : ValidationStatus.Failed, detail);
-            AddUiEvidence(passed ? "后台提交实验通过允许的状态检查。" : $"后台提交实验失败：{detail}");
-
-            DeleteCurrentTestImage();
-            SubmitConsentCheckBox.IsChecked = false;
-        }
-        catch (Exception exception)
-        {
-            await RecordAsync("background-submit", ValidationStatus.Failed,
-                $"Unhandled failure: {exception.GetType().Name}.");
-            AddUiEvidence($"后台提交实验异常：{exception.GetType().Name} — {exception.Message}");
-        }
-    }
-
-    private async void CaptureButton_Click(object sender, RoutedEventArgs e)
-    {
-        CaptureButton.IsEnabled = false;
-        try
-        {
-            var result = await _primaryDisplayCapture.CaptureAsync();
-            var dimensionsValid = result.OutputWidth <= 1920 && result.OutputHeight <= 1080;
-            var status = dimensionsValid ? ValidationStatus.Passed : ValidationStatus.Failed;
-            var detail =
-                $"source={result.SourceWidth}x{result.SourceHeight}; output={result.OutputWidth}x{result.OutputHeight}; " +
-                $"bytes={result.FileBytes}; fixedTemporaryPath=true.";
-            CaptureResultText.Text =
-                $"源：{result.SourceWidth}×{result.SourceHeight}；输出：{result.OutputWidth}×{result.OutputHeight}；" +
-                $"大小：{result.FileBytes:N0} 字节；路径：%TEMP%\\OpenGameMate\\primary-display.png";
-            await RecordAsync("primary-display-capture", status, detail);
-        }
-        catch (Exception exception)
-        {
-            CaptureResultText.Text = $"捕获失败：{exception.GetType().Name} — {exception.Message}";
-            await RecordAsync("primary-display-capture", ValidationStatus.Failed,
-                $"Capture failed: {exception.GetType().Name}.");
-        }
-        finally
-        {
-            CaptureButton.IsEnabled = true;
-        }
-    }
-
-    private async void DeleteScreenshotButton_Click(object sender, RoutedEventArgs e)
-    {
-        var deleted = _primaryDisplayCapture.DeleteTemporaryScreenshot();
-        CaptureResultText.Text = deleted ? "临时截图已删除。" : "没有临时截图需要删除。";
-        await RecordAsync("temporary-screenshot-cleanup", ValidationStatus.Passed,
-            deleted ? "The single fixed temporary screenshot was deleted." : "No temporary screenshot existed.");
+        UpdateUi();
     }
 
     private Task<bool> PromptForMicrophoneAsync(Uri uri)
     {
-        var choice = MessageBox.Show(
+        var result = MessageBox.Show(
             this,
-            $"ChatGPT 官方页面请求麦克风权限：{uri.Host}\n\n是否允许？OpenGameMate 不读取或录制音频。",
-            "ChatGPT 麦克风权限",
+            T(
+                $"ChatGPT 官方页面 {uri.Host} 请求麦克风权限。OpenGameMate 不读取或录制音频。是否允许？",
+                $"The official ChatGPT page {uri.Host} requests microphone access. OpenGameMate does not read or record audio. Allow?"),
+            T("ChatGPT 麦克风权限", "ChatGPT microphone permission"),
             MessageBoxButton.YesNo,
             MessageBoxImage.Question);
-        return Task.FromResult(choice == MessageBoxResult.Yes);
+        return Task.FromResult(result == MessageBoxResult.Yes);
     }
 
-    private async Task RecordAsync(string checkId, ValidationStatus status, string safeDetail)
+    private void ConfirmVoiceButton_Click(object sender, RoutedEventArgs e)
     {
-        await _recorder.AppendAsync(checkId, status, safeDetail);
-        AddUiEvidence($"[{status}] {checkId}: {safeDetail}");
-    }
-
-    private void AddUiEvidence(string message)
-    {
-        EvidenceList.Items.Add($"{DateTime.Now:HH:mm:ss}  {message}");
-        EvidenceList.ScrollIntoView(EvidenceList.Items[^1]);
-    }
-
-    private void DeleteCurrentTestImage()
-    {
-        if (_currentTestImagePath is null || !File.Exists(_currentTestImagePath))
+        if (_browserSession?.IsOnChatGpt() != true)
         {
-            _currentTestImagePath = null;
+            AddActivity(T("请先让浏览器回到 chatgpt.com。", "Return the browser to chatgpt.com first."));
             return;
         }
 
-        File.Delete(_currentTestImagePath);
-        _currentTestImagePath = null;
+        if (_stateMachine.State == GameMateState.Stopped)
+        {
+            ApplyTrigger(GameMateTrigger.Reset);
+            ApplyTrigger(GameMateTrigger.BrowserInitialized);
+        }
+
+        if (_stateMachine.State == GameMateState.Idle)
+        {
+            ApplyTrigger(GameMateTrigger.BrowserInitialized);
+        }
+
+        if (_stateMachine.State == GameMateState.BrowserReady)
+        {
+            ApplyTrigger(GameMateTrigger.VoiceConfirmed);
+            AddActivity(T("Voice 已由用户确认。", "Voice was confirmed by the user."));
+            _ = SafeLogAsync("voice.user-confirmed", DiagnosticLevel.Information, success: true);
+        }
+
+        if (_resumeAfterBrowserRecovery && _stateMachine.State == GameMateState.Ready)
+        {
+            _resumeAfterBrowserRecovery = false;
+            BeginRun(resetConversationTracker: false);
+        }
+
+        UpdateUi();
+    }
+
+    private async void SendFullRoleButton_Click(object sender, RoutedEventArgs e) =>
+        await SendRoleTextAsync(CompanionPrompts.FullRole(PromptLanguage), markFullRoleSent: true, resetConversation: false);
+
+    private async void SendShortRoleButton_Click(object sender, RoutedEventArgs e) =>
+        await SendRoleTextAsync(CompanionPrompts.ShortReminder(PromptLanguage), markFullRoleSent: false, resetConversation: true);
+
+    private void NewConversationButton_Click(object sender, RoutedEventArgs e)
+    {
+        _reminderTracker?.Reset(DateTimeOffset.UtcNow);
+        AddActivity(T("已按用户确认重置会话提醒计数；未向网页发送内容。", "Conversation reminder counters reset without sending webpage content."));
+        UpdateUi();
+    }
+
+    private async Task SendRoleTextAsync(string text, bool markFullRoleSent, bool resetConversation)
+    {
+        if (_adapter is null || _browserSession?.IsOnChatGpt() != true ||
+            _stateMachine.State is not (GameMateState.BrowserReady or GameMateState.Ready or GameMateState.Paused))
+        {
+            AddActivity(T("角色提示未发送：请先打开 ChatGPT，并在开始陪玩前操作。", "Role text was not sent: open ChatGPT and do this before starting."));
+            return;
+        }
+
+        var confirmation = MessageBox.Show(
+            this,
+            T("这会向当前真实 ChatGPT 对话发送角色文字。确认发送？", "This will send role text to the current real ChatGPT chat. Continue?"),
+            "OpenGameMate",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (confirmation != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        _auxiliaryOperation = true;
+        UpdateUi();
+        try
+        {
+            var preparation = await _adapter.PrepareTextAsync(text);
+            if (!preparation.TextInserted || preparation.Status != WebAdapterStatus.Succeeded)
+            {
+                HandleAdapterFailure(preparation.Status, "role-prepare");
+                return;
+            }
+
+            var submission = await _adapter.SubmitAsync();
+            if (submission.Status != WebAdapterStatus.Succeeded ||
+                !submission.TriggerInvoked ||
+                !(submission.ComposerCleared || submission.AttachmentCleared))
+            {
+                HandleAdapterFailure(submission.Status, "role-submit");
+                return;
+            }
+
+            if (markFullRoleSent)
+            {
+                _settings = _settings with { RolePromptSent = true };
+                await _settingsStore.SaveAsync(_settings);
+                RoleStatusText.Text = T("已记录完整角色设定发送成功。", "Full role initialization was recorded as sent.");
+            }
+
+            if (resetConversation)
+            {
+                _reminderTracker?.Reset(DateTimeOffset.UtcNow);
+            }
+
+            AddActivity(T("角色文字已提交；未读取 ChatGPT 回复。", "Role text submitted without reading the reply."));
+            await SafeLogAsync("role-text.submitted", DiagnosticLevel.Information, success: true);
+        }
+        catch (Exception exception)
+        {
+            await ReportExceptionAsync("role-text.failed", "role-text", exception);
+        }
+        finally
+        {
+            _auxiliaryOperation = false;
+            UpdateUi();
+        }
+    }
+
+    private async void StartButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_stateMachine.State != GameMateState.Ready)
+        {
+            return;
+        }
+
+        if (!await ConfirmPrivacyBeforeFirstCaptureAsync())
+        {
+            return;
+        }
+
+        _browserRestartGate.ResetForUserStartedSession();
+        BeginRun(resetConversationTracker: true);
+    }
+
+    private async Task<bool> ConfirmPrivacyBeforeFirstCaptureAsync()
+    {
+        if (!_settings.ShowPrivacyWarningOnFirstStart)
+        {
+            return true;
+        }
+
+        var result = MessageBox.Show(
+            this,
+            T(
+                "OpenGameMate 将每 2 分钟捕获整个主显示器并发送到当前 ChatGPT 对话。画面可能包含通知、聊天、账号名或其他私人内容。请先关闭敏感窗口。独占全屏、受保护内容和反作弊环境可能黑屏或失败，程序不会绕过保护。\n\n是否理解风险并开始？",
+                "OpenGameMate will capture the entire primary display every two minutes and send it to the current ChatGPT chat. Notifications, chats, account names, or other private content may be included. Close sensitive windows first. Exclusive fullscreen, protected content, and anti-cheat environments may fail or produce black frames; protections are not bypassed.\n\nDo you understand the risk and want to start?"),
+            T("整屏捕获隐私确认", "Full-display capture privacy confirmation"),
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (result != MessageBoxResult.Yes)
+        {
+            return false;
+        }
+
+        _settings = _settings with { ShowPrivacyWarningOnFirstStart = false };
+        try
+        {
+            await _settingsStore.SaveAsync(_settings);
+        }
+        catch (Exception exception)
+        {
+            await ReportExceptionAsync("settings.save-failed", "privacy-setting", exception);
+        }
+
+        return true;
+    }
+
+    private void BeginRun(bool resetConversationTracker)
+    {
+        if (_stateMachine.State != GameMateState.Ready)
+        {
+            return;
+        }
+
+        ApplyTrigger(GameMateTrigger.Start);
+        if (resetConversationTracker || _reminderTracker is null)
+        {
+            _reminderTracker = new ConversationReminderTracker(DateTimeOffset.UtcNow);
+        }
+
+        _runCancellation?.Cancel();
+        _runCancellation?.Dispose();
+        _runCancellation = new CancellationTokenSource();
+        _automaticLoopTask = RunAutomaticLoopAsync(_runCancellation.Token);
+        AddActivity(T("陪玩已开始；第一次自动发送将在 2 分钟后。", "Companion mode started; the first automatic send is in two minutes."));
+        _ = SafeLogAsync("run.started", DiagnosticLevel.Information, success: true);
+        UpdateUi();
+    }
+
+    private async Task RunAutomaticLoopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _automaticSendLoop.RunAsync(
+                () => _stateMachine.State == GameMateState.Running,
+                async token =>
+                {
+                    var result = await _submissionCoordinator.RunAutomaticAsync(token);
+                    if (result.Status != SubmissionDispatchStatus.Executed)
+                    {
+                        await SafeLogAsync(
+                            "submission.automatic-skipped",
+                            DiagnosticLevel.Information,
+                            errorCode: result.Status.ToString());
+                    }
+                },
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            await ReportExceptionAsync("scheduler.failed", "scheduler", exception);
+        }
+    }
+
+    private async void SendNowButton_Click(object sender, RoutedEventArgs e) => await SendNowAsync();
+
+    private async Task SendNowAsync()
+    {
+        if (_stateMachine.State != GameMateState.Running)
+        {
+            return;
+        }
+
+        var result = await _submissionCoordinator.RunManualAsync(_runCancellation?.Token ?? CancellationToken.None);
+        if (result.Status != SubmissionDispatchStatus.Executed)
+        {
+            AddActivity(T("当前已有发送任务；手动请求未排队。", "A submission is active; the manual request was not queued."));
+        }
+    }
+
+    private Task<SubmissionOutcome> DispatchSubmissionAsync(
+        SubmissionOrigin origin,
+        CancellationToken cancellationToken)
+    {
+        if (Dispatcher.CheckAccess())
+        {
+            return ExecuteSubmissionAsync(origin, cancellationToken);
+        }
+
+        return Dispatcher.InvokeAsync(() => ExecuteSubmissionAsync(origin, cancellationToken)).Task.Unwrap();
+    }
+
+    private async Task<SubmissionOutcome> ExecuteSubmissionAsync(
+        SubmissionOrigin origin,
+        CancellationToken cancellationToken)
+    {
+        if (_stateMachine.State != GameMateState.Running || _adapter is null)
+        {
+            return SubmissionOutcome.OrdinaryFailure;
+        }
+
+        ApplyTrigger(GameMateTrigger.BeginSend);
+        UpdateUi();
+        SubmissionOutcome outcome;
+        try
+        {
+            outcome = await PerformSubmissionAsync(origin, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            outcome = SubmissionOutcome.OrdinaryFailure;
+        }
+        catch (ScreenCaptureException exception)
+        {
+            outcome = SubmissionOutcome.OrdinaryFailure;
+            await SafeLogAsync(
+                "capture.failed",
+                DiagnosticLevel.Warning,
+                errorCode: exception.Code.ToString(),
+                exceptionType: exception.GetType().Name);
+            AddActivity(T(
+                $"截图失败：{exception.Code}。独占全屏可尝试无边框模式。",
+                $"Capture failed: {exception.Code}. Try borderless mode for exclusive fullscreen."));
+        }
+        catch (Exception exception)
+        {
+            outcome = SubmissionOutcome.OrdinaryFailure;
+            await ReportExceptionAsync("submission.failed", "submission", exception);
+        }
+        finally
+        {
+            try
+            {
+                _capture.DeleteTemporaryScreenshot();
+            }
+            catch (Exception exception)
+            {
+                await ReportExceptionAsync("capture.cleanup-failed", "capture-cleanup", exception);
+            }
+        }
+
+        CompleteSubmission(outcome);
+        UpdateUi();
+        return outcome;
+    }
+
+    private async Task<SubmissionOutcome> PerformSubmissionAsync(
+        SubmissionOrigin origin,
+        CancellationToken cancellationToken)
+    {
+        var capture = await _capture.CaptureAsync(cancellationToken);
+        await SafeLogAsync(
+            "capture.succeeded",
+            DiagnosticLevel.Information,
+            success: true,
+            imageWidth: capture.OutputWidth,
+            imageHeight: capture.OutputHeight,
+            fileSizeBytes: capture.FileBytes);
+
+        var message = origin == SubmissionOrigin.Manual
+            ? CompanionPrompts.ManualScreenshot(PromptLanguage)
+            : CompanionPrompts.AutomaticScreenshot(PromptLanguage);
+        var preparation = await _adapter!.PrepareInputAsync(capture.Path, message, cancellationToken);
+        if (preparation.Status != WebAdapterStatus.Succeeded ||
+            !preparation.ImageAdded ||
+            !preparation.TextInserted)
+        {
+            return MapAdapterStatus(preparation.Status);
+        }
+
+        var submission = await _adapter.SubmitAsync(cancellationToken);
+        if (submission.Status != WebAdapterStatus.Succeeded ||
+            !submission.TriggerInvoked ||
+            !(submission.ComposerCleared || submission.AttachmentCleared))
+        {
+            return MapAdapterStatus(submission.Status);
+        }
+
+        await SafeLogAsync("submission.succeeded", DiagnosticLevel.Information, success: true);
+        AddActivity(origin == SubmissionOrigin.Manual
+            ? T("手动画面已发送。", "Manual screen sent.")
+            : T("自动画面已发送。", "Automatic screen sent."));
+        return SubmissionOutcome.Succeeded;
+    }
+
+    private static SubmissionOutcome MapAdapterStatus(WebAdapterStatus status) => status switch
+    {
+        WebAdapterStatus.QuotaReached => SubmissionOutcome.QuotaReached,
+        WebAdapterStatus.AdapterInvalid => SubmissionOutcome.AdapterInvalid,
+        _ => SubmissionOutcome.OrdinaryFailure,
+    };
+
+    private void CompleteSubmission(SubmissionOutcome outcome)
+    {
+        if (_stateMachine.State != GameMateState.Sending)
+        {
+            return;
+        }
+
+        switch (outcome)
+        {
+            case SubmissionOutcome.Succeeded:
+                ApplyTrigger(GameMateTrigger.SendSucceeded);
+                _reminderTracker?.RecordSuccessfulImage();
+                RaiseConversationReminderIfDue();
+                break;
+            case SubmissionOutcome.QuotaReached:
+                ApplyTrigger(GameMateTrigger.QuotaReached);
+                _runCancellation?.Cancel();
+                AddActivity(T("检测到图片额度限制，已进入纯语音模式，不会重试或新建对话绕过限制。", "Image quota was detected. Voice-only mode is active; no retry or new-chat bypass will be attempted."));
+                _trayIcon?.Notify("OpenGameMate", T("已进入纯语音模式。", "Voice-only mode is active."));
+                break;
+            case SubmissionOutcome.AdapterInvalid:
+                ApplyTrigger(GameMateTrigger.AdapterInvalid);
+                _runCancellation?.Cancel();
+                AddActivity(T("网页适配失效，已立即暂停且不会随机点击。", "The webpage adapter failed closed; no random click was attempted."));
+                _trayIcon?.Notify("OpenGameMate", T("网页适配失效，已暂停。", "Web adapter failed; paused."));
+                break;
+            default:
+                ApplyTrigger(GameMateTrigger.SendFailed);
+                AddActivity(T("本次发送失败；不会立即重试，下个周期再尝试。", "This send failed; no immediate retry will occur."));
+                break;
+        }
+
+        _ = SafeLogAsync(
+            "submission.completed",
+            outcome == SubmissionOutcome.Succeeded ? DiagnosticLevel.Information : DiagnosticLevel.Warning,
+            errorCode: outcome == SubmissionOutcome.Succeeded ? null : outcome.ToString(),
+            success: outcome == SubmissionOutcome.Succeeded);
+    }
+
+    private void RaiseConversationReminderIfDue()
+    {
+        if (_reminderTracker?.TryRaiseReminder(DateTimeOffset.UtcNow, out var reason) != true)
+        {
+            return;
+        }
+
+        AddActivity(T(
+            $"会话提醒已触发（{reason}）：请自行新建 ChatGPT 对话，再选择是否发送角色提醒。",
+            $"Conversation reminder ({reason}): create a new ChatGPT chat, then choose whether to send a role reminder."));
+        _trayIcon?.Notify(
+            "OpenGameMate",
+            T("建议自行新建 ChatGPT 对话。", "Consider creating a new ChatGPT chat."));
+        _ = SafeLogAsync("conversation.reminder", DiagnosticLevel.Information, errorCode: reason?.ToString());
+    }
+
+    private void PauseResumeButton_Click(object sender, RoutedEventArgs e) => PauseOrResume();
+
+    private void PauseOrResume()
+    {
+        if (_stateMachine.State == GameMateState.Running)
+        {
+            ApplyTrigger(GameMateTrigger.Pause);
+            AddActivity(T("已暂停；固定计时继续，暂停期间到期事件会跳过。", "Paused; fixed timing continues and occurrences are skipped."));
+        }
+        else if (_stateMachine.State == GameMateState.Paused)
+        {
+            ApplyTrigger(GameMateTrigger.Resume);
+            AddActivity(T("已恢复；等待下一个固定周期。", "Resumed; waiting for the next fixed occurrence."));
+        }
+
+        UpdateUi();
+    }
+
+    private void StopButton_Click(object sender, RoutedEventArgs e) => StopRun();
+
+    private void StopRun()
+    {
+        _runCancellation?.Cancel();
+        if (_stateMachine.CanApply(GameMateTrigger.Stop))
+        {
+            ApplyTrigger(GameMateTrigger.Stop);
+            AddActivity(T("已停止自动截图；Voice 窗口由你决定是否继续或关闭。", "Automatic capture stopped; you control whether Voice remains open."));
+            _ = SafeLogAsync("run.stopped", DiagnosticLevel.Information, success: true);
+        }
+
+        try
+        {
+            _capture.DeleteTemporaryScreenshot();
+        }
+        catch
+        {
+        }
+
+        UpdateUi();
+    }
+
+    private void RetryAdapterButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_stateMachine.State != GameMateState.AdapterError || _browserSession?.IsOnChatGpt() != true)
+        {
+            return;
+        }
+
+        _adapter = new ChatGptWebAdapter(_browserSession, ChatGptAdapterRules.BuiltIn);
+        ApplyTrigger(GameMateTrigger.AdapterRecovered);
+        AddActivity(T("已重新加载内置规则。请确认 Voice 后再开始；若仍失败请导出诊断。", "Built-in rules reloaded. Confirm Voice before restarting; export diagnostics if it still fails."));
+        UpdateUi();
+    }
+
+    private void HandleAdapterFailure(WebAdapterStatus status, string operation)
+    {
+        AddActivity(T($"网页操作失败：{status}。", $"Web operation failed: {status}."));
+        _ = SafeLogAsync("adapter.operation-failed", DiagnosticLevel.Warning, errorCode: operation);
+        if (status == WebAdapterStatus.AdapterInvalid && _stateMachine.CanApply(GameMateTrigger.AdapterInvalid))
+        {
+            ApplyTrigger(GameMateTrigger.AdapterInvalid);
+            _runCancellation?.Cancel();
+        }
+    }
+
+    private void ExportDiagnosticsButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = T("导出 OpenGameMate 诊断包", "Export OpenGameMate diagnostics"),
+            Filter = "ZIP (*.zip)|*.zip",
+            DefaultExt = ".zip",
+            AddExtension = true,
+            FileName = $"OpenGameMate-diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
+            OverwritePrompt = true,
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            var count = DiagnosticExportService.Export(_paths.LogsDirectory, dialog.FileName);
+            AddActivity(T($"已导出诊断包（{count} 个日志文件）。", $"Diagnostics exported ({count} log files)."));
+            _ = SafeLogAsync("diagnostics.exported", DiagnosticLevel.Information, success: true);
+        }
+        catch (Exception exception)
+        {
+            _ = ReportExceptionAsync("diagnostics.export-failed", "diagnostics-export", exception);
+        }
+    }
+
+    private void OpenDataFolderButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Directory.CreateDirectory(_paths.RootDirectory);
+            var startInfo = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
+            startInfo.ArgumentList.Add(_paths.RootDirectory);
+            Process.Start(startInfo);
+        }
+        catch (Exception exception)
+        {
+            _ = ReportExceptionAsync("data-folder.open-failed", "open-data-folder", exception);
+        }
+    }
+
+    private void BrowserDataHelpButton_Click(object sender, RoutedEventArgs e)
+    {
+        MessageBox.Show(
+            this,
+            T(
+                $"浏览器登录数据位于：\n{_paths.WebViewUserDataDirectory}\n\n仓库安全规则禁止程序递归批量删除目录。若要清除登录数据，请先完全退出 OpenGameMate，等待 WebView2 进程结束，再手动删除该目录。",
+                $"Browser sign-in data is stored at:\n{_paths.WebViewUserDataDirectory}\n\nRepository safety rules prohibit recursive bulk deletion. To clear sign-in data, fully exit OpenGameMate, wait for WebView2 processes to end, then delete this directory manually."),
+            T("浏览器数据清理", "Browser-data cleanup"),
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
+
+    private void ApplyTrigger(GameMateTrigger trigger)
+    {
+        var transition = _stateMachine.Apply(trigger);
+        _ = SafeLogAsync(
+            "state.transition",
+            DiagnosticLevel.Information,
+            errorCode: $"{transition.PreviousState}-{trigger}-{transition.CurrentState}");
+        UpdateUi();
+    }
+
+    private void UpdateUi()
+    {
+        if (!IsInitialized)
+        {
+            return;
+        }
+
+        var state = _stateMachine.State;
+        StateText.Text = state.ToString();
+        var browserAvailable = _browserWindow is not null;
+        OpenBrowserButton.IsEnabled = !browserAvailable;
+        ShowBrowserButton.IsEnabled = browserAvailable;
+        HideBrowserButton.IsEnabled = browserAvailable;
+        CloseBrowserButton.IsEnabled = browserAvailable;
+        ConfirmVoiceButton.IsEnabled = browserAvailable &&
+            state is GameMateState.BrowserReady or GameMateState.Stopped or GameMateState.Idle;
+        var canSendRole = !_auxiliaryOperation && _adapter is not null &&
+            state is GameMateState.BrowserReady or GameMateState.Ready or GameMateState.Paused;
+        SendFullRoleButton.IsEnabled = canSendRole;
+        SendShortRoleButton.IsEnabled = canSendRole;
+        NewConversationButton.IsEnabled = state is GameMateState.Ready or GameMateState.Running or GameMateState.Paused;
+        StartButton.IsEnabled = state == GameMateState.Ready && !_auxiliaryOperation;
+        SendNowButton.IsEnabled = state == GameMateState.Running;
+        PauseResumeButton.IsEnabled = state is GameMateState.Running or GameMateState.Paused;
+        PauseResumeButton.Content = state == GameMateState.Paused
+            ? T("恢复", "Resume")
+            : T("暂停", "Pause");
+        StopButton.IsEnabled = IsRunRelatedState(state) || state == GameMateState.AdapterError;
+        RetryAdapterButton.IsEnabled = state == GameMateState.AdapterError;
+        RunStatusText.Text = StateDescription(state);
+
+        _trayIcon?.Update(
+            IsChinese,
+            state.ToString(),
+            browserAvailable,
+            state == GameMateState.Running,
+            state is GameMateState.Running or GameMateState.Paused,
+            state == GameMateState.Paused,
+            StopButton.IsEnabled);
+    }
+
+    private string StateDescription(GameMateState state) => state switch
+    {
+        GameMateState.Idle => T("等待打开 ChatGPT。", "Waiting for ChatGPT."),
+        GameMateState.BrowserReady => T("浏览器已就绪；请登录、开启 Voice 并确认。", "Browser ready; sign in, start Voice, and confirm."),
+        GameMateState.Ready => T("Voice 已确认；可发送角色设定或开始陪玩。", "Voice confirmed; initialize the role or start."),
+        GameMateState.Running => T("正在运行；每 2 分钟自动发送。", "Running; automatic send every two minutes."),
+        GameMateState.Sending => T("正在处理一张截图；不会并发或排队。", "Processing one screenshot; no concurrency or queue."),
+        GameMateState.Paused => T("已暂停；到期事件会跳过。", "Paused; due occurrences are skipped."),
+        GameMateState.VoiceOnly => T("图片额度受限；保持纯语音，不再自动发送。", "Image quota limited; Voice-only mode, no more automatic sends."),
+        GameMateState.AdapterError => T("网页适配失效；已停止发送。", "Web adapter failed; sending is stopped."),
+        GameMateState.Stopped => T("已停止；若要重新开始，请再次确认 Voice。", "Stopped; confirm Voice again to restart."),
+        _ => state.ToString(),
+    };
+
+    private static bool IsRunRelatedState(GameMateState state) =>
+        state is GameMateState.Running or GameMateState.Sending or GameMateState.Paused or GameMateState.VoiceOnly;
+
+    private void AddActivity(string message)
+    {
+        ActivityList.Items.Add($"{DateTime.Now:HH:mm:ss}  {message}");
+        while (ActivityList.Items.Count > 200)
+        {
+            ActivityList.Items.RemoveAt(0);
+        }
+
+        ActivityList.ScrollIntoView(ActivityList.Items[^1]);
+    }
+
+    private async Task SafeLogAsync(
+        string eventName,
+        DiagnosticLevel level,
+        string? errorCode = null,
+        bool? success = null,
+        int? imageWidth = null,
+        int? imageHeight = null,
+        long? fileSizeBytes = null,
+        string? exceptionType = null)
+    {
+        try
+        {
+            await _logger.AppendAsync(new DiagnosticEvent(
+                DateTimeOffset.UtcNow,
+                level,
+                eventName,
+                _stateMachine.State,
+                errorCode,
+                success,
+                imageWidth,
+                imageHeight,
+                fileSizeBytes,
+                exceptionType));
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task ReportExceptionAsync(string eventName, string errorCode, Exception exception)
+    {
+        AddActivity(T($"操作失败：{errorCode}（{exception.GetType().Name}）。", $"Operation failed: {errorCode} ({exception.GetType().Name})."));
+        await SafeLogAsync(
+            eventName,
+            DiagnosticLevel.Error,
+            errorCode,
+            success: false,
+            exceptionType: exception.GetType().Name);
+    }
+
+    private void ShowMainWindow()
+    {
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    private void OnUi(Action action) => Dispatcher.BeginInvoke(action);
+
+    private void ExitApplication()
+    {
+        _isExiting = true;
+        Close();
     }
 
     private void Window_Closing(object? sender, CancelEventArgs e)
     {
-        if (_isExiting)
+        if (!_isExiting && IsRunRelatedState(_stateMachine.State))
         {
-            return;
+            var result = MessageBox.Show(
+                this,
+                T("陪玩仍在运行。确认停止并退出？", "Companion mode is running. Stop and exit?"),
+                "OpenGameMate",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (result != MessageBoxResult.Yes)
+            {
+                e.Cancel = true;
+                return;
+            }
         }
 
         _isExiting = true;
-        DeleteCurrentTestImage();
-        _primaryDisplayCapture.DeleteTemporaryScreenshot();
-        if (_browserWindow is not null)
+        _runCancellation?.Cancel();
+        _runCancellation?.Dispose();
+        _runCancellation = null;
+        _expectedBrowserClose = true;
+        _browserWindow?.Close();
+        _browserSession?.Dispose();
+        try
         {
-            _browserWindow.Close();
+            _capture.DeleteTemporaryScreenshot();
         }
+        catch
+        {
+        }
+        _trayIcon?.Dispose();
+        _trayIcon = null;
     }
 }

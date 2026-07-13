@@ -1,57 +1,75 @@
-# OpenGameMate Phase 0 PoC
+# OpenGameMate v0.1.0
 
-本仓库当前只实现开发文档规定的 Phase 0 技术可行性验证，不是完整应用。
+OpenGameMate 是一个开源 Windows 桌面学习项目：它在独立 WebView2 中打开 ChatGPT，由用户自行登录和开启 Voice；用户明确开始后，程序每两分钟捕获一次主显示器并把截图与简短提示提交到当前对话。
 
-PoC 验证以下边界：
+OpenGameMate is an open-source Windows desktop learning project. It opens ChatGPT in an isolated WebView2 session under the user's control. After the user explicitly starts companion mode, it captures the primary display every two minutes and submits the image with a short prompt to the current chat.
 
-- WPF / .NET 8 / WebView2 基础结构；
-- 使用独立用户数据目录打开 ChatGPT 官方网页；
-- 由用户本人完成登录与麦克风授权；
-- Voice 正常结束应使用 ChatGPT 网页退出控件；“隐藏 ChatGPT”不会结束语音，必要时使用“关闭 ChatGPT（结束语音）”销毁 WebView2 会话；
-- 使用 Windows Graphics Capture 捕获主显示器并限制为不超过 1920×1080；
-- 尝试在 WebView2 不在前台、鼠标不被移动的情况下加入一张无隐私测试图片和固定文字；
-- 仅在用户再次明确确认后尝试提交；
-- 不读取 ChatGPT 回复、聊天记录、Cookie、登录令牌或完整页面 HTML。
+OpenGameMate is not an OpenAI product, official extension, or unlimited-quota tool.
 
-## 环境要求
+## 安全与隐私 / Safety and privacy
 
-- Windows 10 1903 或更新版本；
-- .NET 8 SDK；
-- Microsoft Edge WebView2 Evergreen Runtime；
-- 可访问 `https://chatgpt.com/` 的网络环境。
+- 不读取 ChatGPT 回复、聊天记录、账号、Cookie、Token、完整 HTML 或音频。
+- 不注入游戏、不读游戏内存、不模拟全局键鼠、不绕过反作弊、验证码、额度或受保护内容。
+- 截图只写入一个应用临时 PNG，提交尝试结束后删除；异常重启不恢复截图或运行状态。
+- 首次开始前必须确认“捕获整个主显示器”的隐私风险。
+- 后台提交的 Phase 0 单次实验证据已通过，但网页结构、账号能力、独占全屏、额度和平台政策仍会变化。
 
-本工作区已在 `.dotnet/` 中准备隔离的 .NET SDK 8.0.422；该目录被 Git 忽略，不属于源码交付物。
+- Does not read ChatGPT replies, history, accounts, cookies, tokens, full HTML, or audio.
+- Does not inject into games, read game memory, synthesize global input, or bypass anti-cheat, verification, quotas, or protected content.
+- Keeps one application temporary PNG and deletes it after each attempt; runtime capture state is not restored after a crash.
+- Requires explicit acknowledgement of full-primary-display capture risk before first start.
+- The Phase 0 background submission path passed a real one-shot test, but webpage structure, account capabilities, fullscreen modes, quotas, and platform policy can change.
 
-如果系统 WebView2 版本过旧或无法自动更新，可先安装仓库外的隔离 Fixed Runtime（约 300 MB 下载）：
+See [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md), and the archived [Phase 0 feasibility report](docs/PHASE0_FEASIBILITY_REPORT.md).
+
+## 使用 / Use
+
+1. 启动 OpenGameMate。程序只显示主界面，不会自动打开浏览器或截图。
+2. 点击“打开 ChatGPT”，自行登录并启动 Voice。
+3. 回到主界面点击“我已开启 Voice”。
+4. 可选：明确发送一次完整角色设定。
+5. 点击“开始陪玩”，阅读并接受整屏捕获提示。
+6. 使用主界面或托盘执行立即发送、暂停、恢复和停止。
+
+1. Start OpenGameMate. Only the main window opens; no browser or capture starts automatically.
+2. Click **Open ChatGPT**, sign in yourself, and start Voice.
+3. Return and click **I started Voice**.
+4. Optionally send the full role initialization explicitly.
+5. Click **Start** and accept the full-display privacy warning.
+6. Use the main window or tray for send-now, pause, resume, and stop.
+
+## 构建 / Build
+
+Requirements: Windows 10 19041 or newer, .NET 8 SDK, and a current Microsoft Edge WebView2 Runtime.
 
 ```powershell
-& .\scripts\Install-Phase0FixedWebView2.ps1
+dotnet restore .\OpenGameMate.sln
+dotnet build .\OpenGameMate.sln -c Release
+dotnet test .\tests\OpenGameMate.Tests\OpenGameMate.Tests.csproj -c Release --no-build
 ```
 
-脚本只使用微软官方、带有效 Microsoft 签名的 WebView2 150.0.4078.65 x64 CAB，并展开到 `%LocalAppData%\OpenGameMate\Phase0\WebView2Runtime`。它不修改系统 WebView2，也不会批量删除文件。PoC 会优先选择该目录，找不到时才回退到系统 Evergreen Runtime。
-
-## 构建与启动
-
-在 PowerShell 中进入仓库根目录：
+Run from source:
 
 ```powershell
-$env:DOTNET_CLI_HOME = Join-Path $env:TEMP 'OpenGameMate-dotnet-home'
-$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
-& .\.dotnet\dotnet.exe restore .\OpenGameMate.sln
-& .\.dotnet\dotnet.exe build .\OpenGameMate.sln --configuration Debug
-& .\src\OpenGameMate.App\bin\Debug\net8.0-windows10.0.19041.0\OpenGameMate.App.exe
+dotnet run --project .\src\OpenGameMate.App\OpenGameMate.App.csproj -c Release
 ```
 
-如果系统已经安装 .NET 8 SDK，可将 `.\.dotnet\dotnet.exe` 替换为 `dotnet`。
+Portable data mode:
 
-详细人工步骤见 [Phase 0 测试步骤](docs/PHASE0_TEST_STEPS.md)，当前结论见 [Phase 0 可行性报告](docs/PHASE0_FEASIBILITY_REPORT.md)。
+```powershell
+OpenGameMate.App.exe --portable
+```
 
-## 数据位置
+Installed mode stores operational data under `%LocalAppData%\OpenGameMate\`; portable mode uses `data\` beside the executable. The application does not recursively delete the WebView2 profile; use the in-app cleanup instructions after fully exiting.
 
-- 独立 WebView2 用户数据：`%LocalAppData%\OpenGameMate\Phase0\UserData`
-- 可选隔离 WebView2 Runtime：`%LocalAppData%\OpenGameMate\Phase0\WebView2Runtime`
-- 最小验证日志：`%LocalAppData%\OpenGameMate\Phase0\phase0-results.jsonl`
-- 主显示器临时截图：`%TEMP%\OpenGameMate\primary-display.png`
-- 无隐私上传测试图：`%TEMP%\OpenGameMate\phase0-upload.png`
+## 打包 / Packaging
 
-日志只保存检查项、通过/失败状态和非敏感限制信息，不保存网页正文或账号数据。
+`scripts\Publish-Portable.ps1` creates a framework-dependent Windows x64 portable folder. `packaging\OpenGameMate.iss` is the Inno Setup installer definition. Both refuse to reuse a non-empty output folder; the repository never performs recursive deletion.
+
+## 已知限制 / Known limitations
+
+- Remote adapter updates are safe-disabled until the project has an official GitHub repository and a maintainer-owned signing public key. Built-in compiled rules remain available.
+- Browser-data one-click recursive deletion is not implemented because repository safety rules prohibit bulk directory deletion; the UI provides the exact manual cleanup procedure.
+- No automated test logs in to a real ChatGPT account, opens Voice, captures the desktop, or sends a real message.
+
+Licensed under the [MIT License](LICENSE).

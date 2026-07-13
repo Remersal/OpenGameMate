@@ -147,6 +147,27 @@ public class Phase0UnitTests
     }
 
     [Theory]
+    [InlineData(true, true, false, false, OpenGameMate.Core.WebAdapterStatus.Succeeded)]
+    [InlineData(false, true, true, false, OpenGameMate.Core.WebAdapterStatus.QuotaReached)]
+    [InlineData(true, true, false, true, OpenGameMate.Core.WebAdapterStatus.PlatformError)]
+    [InlineData(false, true, false, false, OpenGameMate.Core.WebAdapterStatus.AdapterInvalid)]
+    public void PreparationProbe_ClassifiesQuotaBeforeSelectorFailure(
+        bool imageAdded,
+        bool textInserted,
+        bool quotaDetected,
+        bool platformErrorDetected,
+        OpenGameMate.Core.WebAdapterStatus expected)
+    {
+        Assert.Equal(
+            expected,
+            OpenGameMate.Adapters.ChatGptWebAdapter.ClassifyPreparationProbe(
+                imageAdded,
+                textInserted,
+                quotaDetected,
+                platformErrorDetected));
+    }
+
+    [Theory]
     [InlineData(3840, 2160, 1920, 1080)]
     [InlineData(2560, 1440, 1920, 1080)]
     [InlineData(3440, 1440, 1920, 804)]

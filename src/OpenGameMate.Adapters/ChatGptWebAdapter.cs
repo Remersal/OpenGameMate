@@ -87,6 +87,8 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         var fileInputSelectorJson = JsonSerializer.Serialize(_rules.FileInputSelector);
         var composerSelectorJson = JsonSerializer.Serialize(_rules.ComposerSelector);
         var previewSelectorsJson = JsonSerializer.Serialize(_rules.AttachmentPreviewSelectors);
+        var quotaSelectorsJson = JsonSerializer.Serialize(_rules.QuotaErrorSelectors);
+        var platformErrorSelectorsJson = JsonSerializer.Serialize(_rules.PlatformErrorSelectors);
 
         var locateFileInput = await EvaluateAsync(
             $$"""
@@ -198,6 +200,8 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
               const composer = document.querySelector({{composerSelectorJson}});
               const scope = composer?.closest('form') ?? document;
               const previewSelectors = {{previewSelectorsJson}};
+              const quotaSelectors = {{quotaSelectorsJson}};
+              const platformErrorSelectors = {{platformErrorSelectorsJson}};
               const actual = composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement
                 ? composer.value
                 : composer?.innerText;
@@ -206,7 +210,9 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 fileSelected: fileInput?.files?.length === 1,
                 previewDetected: previewSelectors.some(selector => scope.querySelector(selector)) ||
                   Boolean(scope.querySelector('img[src^="blob:"]')),
-                textInserted: actual === {{messageJson}}
+                textInserted: actual === {{messageJson}},
+                quotaDetected: quotaSelectors.some(selector => document.querySelector(selector)),
+                platformErrorDetected: platformErrorSelectors.some(selector => document.querySelector(selector))
               };
             })()
             """);
@@ -215,15 +221,19 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             GetBoolean(inputResult, "fileSelected") ||
             GetBoolean(attachmentResult, "fileSelected");
         var previewDetected = GetBoolean(probeResult, "previewDetected");
+        var textInserted = GetBoolean(probeResult, "textInserted") ||
+            GetBoolean(inputResult, "textInserted");
+        var status = ClassifyPreparationProbe(
+            fileSelected || previewDetected,
+            textInserted,
+            GetBoolean(probeResult, "quotaDetected"),
+            GetBoolean(probeResult, "platformErrorDetected"));
         return new(
             fileSelected,
             previewDetected,
-            GetBoolean(probeResult, "textInserted") || GetBoolean(inputResult, "textInserted"),
+            textInserted,
             $"{attachmentMethod}:{GetCode(attachmentResult)}:{GetCode(probeResult)}",
-            (fileSelected || previewDetected) &&
-            (GetBoolean(probeResult, "textInserted") || GetBoolean(inputResult, "textInserted"))
-                ? WebAdapterStatus.Succeeded
-                : WebAdapterStatus.AdapterInvalid);
+            status);
     }
 
     public async Task<TextPreparationResult> PrepareTextAsync(
@@ -418,6 +428,27 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
 
     private static bool IsMessageValid(string message) =>
         !string.IsNullOrWhiteSpace(message) && message.Length <= MaximumMessageCharacters;
+
+    public static WebAdapterStatus ClassifyPreparationProbe(
+        bool imageAdded,
+        bool textInserted,
+        bool quotaDetected,
+        bool platformErrorDetected)
+    {
+        if (quotaDetected)
+        {
+            return WebAdapterStatus.QuotaReached;
+        }
+
+        if (platformErrorDetected)
+        {
+            return WebAdapterStatus.PlatformError;
+        }
+
+        return imageAdded && textInserted
+            ? WebAdapterStatus.Succeeded
+            : WebAdapterStatus.AdapterInvalid;
+    }
 
     public static JsonElement ParseRuntimeEvaluateResponse(string responseJson)
     {

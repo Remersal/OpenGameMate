@@ -8,7 +8,7 @@
 *.suo
 .vs/
 
-# Phase 0 runtime artifacts
+# Local runtime and package artifacts
 artifacts/
 logs/
 userdata/

@@ -1,3 +1,4 @@
+using System;
 using System.Windows;
 using Microsoft.Web.WebView2.Wpf;
 
@@ -12,11 +13,20 @@ public partial class BrowserWindow : Window
 
     public WebView2 WebView => BrowserView;
 
-    public void ShowForUser()
+    public void ShowForUser(bool activate = true)
     {
-        Show();
+        if (!IsVisible)
+        {
+            ShowActivated = activate;
+            Show();
+            ShowActivated = true;
+        }
+
         WindowState = WindowState.Normal;
-        Activate();
+        if (activate)
+        {
+            Activate();
+        }
     }
 
     protected override void OnClosed(EventArgs e)

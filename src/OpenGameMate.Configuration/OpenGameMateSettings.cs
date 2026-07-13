@@ -22,6 +22,8 @@ public sealed record OpenGameMateSettings
 
     public bool ShowPrivacyWarningOnFirstStart { get; init; } = true;
 
+    public bool RolePromptSent { get; init; }
+
     public void Validate()
     {
         if (SchemaVersion != CurrentSchemaVersion)

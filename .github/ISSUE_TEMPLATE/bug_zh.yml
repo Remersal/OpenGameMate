@@ -1,0 +1,35 @@
+name: Bug 报告（中文）
+description: 报告可复现问题；请勿上传账号、Token、Cookie、对话或私人截图
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "请先删除日志中的私人内容。不要提交 WebView2 用户数据目录。"
+  - type: input
+    id: version
+    attributes:
+      label: 版本与 Windows 版本
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: 预期与实际结果
+    validations:
+      required: true
+  - type: dropdown
+    id: fullscreen
+    attributes:
+      label: 游戏显示模式
+      options:
+        - 无边框 / 窗口
+        - 独占全屏
+        - 不涉及游戏
+    validations:
+      required: true
