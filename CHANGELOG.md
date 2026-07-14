@@ -14,4 +14,5 @@
 - Added persistent privacy-safe adapter, PendingSend, audio-state, preparation, submission, expiry, and WebView2 process-failure diagnostics without webpage, screenshot, prompt, reply, account, token, cookie, or audio content.
 - Added bilingual WPF controls, system tray, state display, role initialization, privacy confirmation, degradation states, and user-initiated diagnostics export.
 - Added the user-selected OpenGameMate application icon to the executable, window, tray, shortcuts, uninstaller, and installer package.
+- Added Simplified Chinese and English installer UI with automatic Windows-language selection.
 - Archived Phase 0 feasibility evidence and retained its conditional limitations.

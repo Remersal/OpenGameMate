@@ -27,6 +27,10 @@ LicenseFile=..\LICENSE
 SetupIconFile=..\assets\OpenGameMate.AppIcon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
+[Languages]
+Name: "chinesesimplified"; MessagesFile: "Languages\ChineseSimplified.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
 [Files]
 Source: "{#MySourceDirectory}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
@@ -35,7 +39,7 @@ Name: "{group}\OpenGameMate"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\OpenGameMate"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch OpenGameMate"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent

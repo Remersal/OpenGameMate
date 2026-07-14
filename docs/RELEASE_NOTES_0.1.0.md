@@ -14,6 +14,7 @@ This source revision implements the v0.1.0 Early Preview architecture and produc
 - User-completed real-environment RC acceptance confirmed normal ChatGPT sign-in, continuous Voice operation, role initialization, manual and automatic image submission, Voice-safe automatic capture, image-grounded AI responses, selectable capture-delay behavior, and long-duration actual use.
 - Portable package generation and documentation for privacy, security, contribution, testing, and release handling.
 - User-selected OpenGameMate artwork is embedded as the application, window, tray, shortcut, uninstaller, and installer icon.
+- The installer supports Simplified Chinese and English, automatically preferring the matching Windows UI language while allowing manual language selection.
 
 ### Public-test follow-up
 

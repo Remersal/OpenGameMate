@@ -61,6 +61,28 @@ if (-not (Test-Path -LiteralPath $applicationIcon -PathType Leaf)) {
     throw "Application icon is missing: $applicationIcon"
 }
 
+$simplifiedChineseMessages = Join-Path $repositoryRoot 'packaging\Languages\ChineseSimplified.isl'
+if (-not (Test-Path -LiteralPath $simplifiedChineseMessages -PathType Leaf)) {
+    throw "Simplified Chinese installer messages are missing: $simplifiedChineseMessages"
+}
+
+$simplifiedChineseDefinition = Get-Content -LiteralPath $simplifiedChineseMessages -Raw
+foreach ($requiredFragment in @(
+    'LanguageName=',
+    'LanguageID=$0804',
+    'CreateDesktopIcon=',
+    'LaunchProgram='
+)) {
+    if ($simplifiedChineseDefinition.IndexOf($requiredFragment, [StringComparison]::Ordinal) -lt 0) {
+        throw "Simplified Chinese installer messages are missing required metadata: $requiredFragment"
+    }
+}
+
+$simplifiedChineseHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $simplifiedChineseMessages).Hash
+if ($simplifiedChineseHash -ne '6753BE2C5E2740D859900FD902824DB2EC568DA5C5B52486524C9762D778B0B0') {
+    throw "Simplified Chinese installer messages do not match the reviewed translation: $simplifiedChineseHash"
+}
+
 [xml]$appProject = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src\OpenGameMate.App\OpenGameMate.App.csproj') -Raw
 $applicationIconProperty = @(
     $appProject.Project.PropertyGroup |
@@ -100,7 +122,11 @@ foreach ($requiredFragment in @(
     'OutputBaseFilename=OpenGameMate-Setup-{#MyAppVersion}',
     'OutputDir={#MyInstallerOutputDirectory}',
     'Source: "{#MySourceDirectory}\*"',
-    'SetupIconFile=..\assets\OpenGameMate.AppIcon.ico'
+    'SetupIconFile=..\assets\OpenGameMate.AppIcon.ico',
+    'Name: "chinesesimplified"; MessagesFile: "Languages\ChineseSimplified.isl"',
+    'Name: "english"; MessagesFile: "compiler:Default.isl"',
+    'Description: "{cm:CreateDesktopIcon}"',
+    'Description: "{cm:LaunchProgram,{#MyAppName}}"'
 )) {
     if ($innoDefinition.IndexOf($requiredFragment, [StringComparison]::Ordinal) -lt 0) {
         throw "Inno Setup definition is missing required release macro usage: $requiredFragment"
