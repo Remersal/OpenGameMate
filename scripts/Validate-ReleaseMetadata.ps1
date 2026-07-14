@@ -56,6 +56,22 @@ if (-not (Test-Path -LiteralPath $releaseNotes -PathType Leaf)) {
     throw "Release notes are missing for version $version."
 }
 
+$applicationIcon = Join-Path $repositoryRoot 'assets\OpenGameMate.AppIcon.ico'
+if (-not (Test-Path -LiteralPath $applicationIcon -PathType Leaf)) {
+    throw "Application icon is missing: $applicationIcon"
+}
+
+[xml]$appProject = Get-Content -LiteralPath (Join-Path $repositoryRoot 'src\OpenGameMate.App\OpenGameMate.App.csproj') -Raw
+$applicationIconProperty = @(
+    $appProject.Project.PropertyGroup |
+        ForEach-Object { $_.ApplicationIcon } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+)
+if ($applicationIconProperty.Count -ne 1 -or
+    [string]$applicationIconProperty[0] -ne '..\..\assets\OpenGameMate.AppIcon.ico') {
+    throw 'OpenGameMate.App must use the release application icon.'
+}
+
 $powerShellScripts = @(
     (Join-Path $repositoryRoot 'scripts\Publish-Portable.ps1'),
     (Join-Path $repositoryRoot 'scripts\Build-Installer.ps1')
@@ -83,7 +99,8 @@ foreach ($requiredFragment in @(
     '#ifndef MyAppVersion',
     'OutputBaseFilename=OpenGameMate-Setup-{#MyAppVersion}',
     'OutputDir={#MyInstallerOutputDirectory}',
-    'Source: "{#MySourceDirectory}\*"'
+    'Source: "{#MySourceDirectory}\*"',
+    'SetupIconFile=..\assets\OpenGameMate.AppIcon.ico'
 )) {
     if ($innoDefinition.IndexOf($requiredFragment, [StringComparison]::Ordinal) -lt 0) {
         throw "Inno Setup definition is missing required release macro usage: $requiredFragment"

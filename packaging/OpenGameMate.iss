@@ -24,6 +24,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 LicenseFile=..\LICENSE
+SetupIconFile=..\assets\OpenGameMate.AppIcon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 
 [Files]

@@ -17,6 +17,7 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\assets\OpenGameMate.AppIcon.ico</ApplicationIcon>
   </PropertyGroup>
 
 </Project>

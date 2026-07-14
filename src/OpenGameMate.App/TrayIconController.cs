@@ -6,6 +6,7 @@ namespace OpenGameMate.App;
 
 public sealed class TrayIconController : IDisposable
 {
+    private readonly Icon _applicationIcon;
     private readonly Forms.NotifyIcon _notifyIcon;
     private readonly Forms.ToolStripMenuItem _showMain;
     private readonly Forms.ToolStripMenuItem _showBrowser;
@@ -42,9 +43,13 @@ public sealed class TrayIconController : IDisposable
         _exit = menu.Items.Add("Exit", null, (_, _) => exit()) as Forms.ToolStripMenuItem
             ?? throw new InvalidOperationException("Unable to create tray menu item.");
 
+        var processPath = Environment.ProcessPath;
+        _applicationIcon = processPath is null
+            ? (Icon)SystemIcons.Application.Clone()
+            : Icon.ExtractAssociatedIcon(processPath) ?? (Icon)SystemIcons.Application.Clone();
         _notifyIcon = new Forms.NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = _applicationIcon,
             Text = "OpenGameMate",
             ContextMenuStrip = menu,
             Visible = true,
@@ -89,5 +94,6 @@ public sealed class TrayIconController : IDisposable
     {
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
+        _applicationIcon.Dispose();
     }
 }

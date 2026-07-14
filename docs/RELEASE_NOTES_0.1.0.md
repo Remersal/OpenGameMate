@@ -13,10 +13,12 @@ This source revision implements the v0.1.0 Early Preview architecture and produc
 - User-controlled targeted validation of sign-in, microphone permission, role initialization, screenshot attachment/submission, Voice-busy deferral, foreground/mouse preservation, proactive image topics, and the automatic screenshot-to-ChatGPT-to-Voice response loop.
 - User-completed real-environment RC acceptance confirmed normal ChatGPT sign-in, continuous Voice operation, role initialization, manual and automatic image submission, Voice-safe automatic capture, image-grounded AI responses, selectable capture-delay behavior, and long-duration actual use.
 - Portable package generation and documentation for privacy, security, contribution, testing, and release handling.
+- User-selected OpenGameMate artwork is embedded as the application, window, tray, shortcut, uninstaller, and installer icon.
 
 ### Public-test follow-up
 
-- Installer executable generation plus install, launch, upgrade/replace, uninstall, and residue checks on a machine with Inno Setup 6.
+- Install, launch, upgrade/replace, uninstall, and residue checks for the generated installer on clean supported Windows environments.
+- Authenticode signing before broad public distribution; the locally generated preview installer is currently unsigned.
 - Publication of signed remote adapter rules after an official GitHub source and maintainer-owned verification public key are available.
 - Exception-matrix observations not explicitly supplied with the final user RC confirmation remain documented test targets during public testing; they are not recorded as passing without evidence.
 
@@ -41,6 +43,6 @@ The recorded user evidence is in [USER_RC_CHECKLIST_0.1.0.md](USER_RC_CHECKLIST_
 - Remote adapter downloads are disabled until the official GitHub source and maintainer-owned public verification key exist.
 - Recursive one-click deletion of the WebView2 profile is omitted under repository safety rules; the UI provides manual cleanup instructions.
 - The portable package is framework-dependent and requires .NET 8 Desktop Runtime and WebView2 Runtime.
-- The installer definition is present, but an installer executable can only be produced on a machine with Inno Setup 6.
+- A local Inno Setup 6 installer executable has been generated; it remains an unsigned preview artifact until maintainer-owned Authenticode signing is configured.
 - User-controlled live checks and final RC acceptance passed for sign-in, Voice, role initialization, image attachment/submission, Voice-safe automatic capture, image-grounded responses, the selectable idle-delay mechanism, and long-duration actual use.
 - The user confirmed long-duration stability acceptance without supplying resource-measurement detail; no CPU or memory figures are asserted in these release notes.

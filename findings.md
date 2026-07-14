@@ -1,5 +1,21 @@
 # 发现与决策
 
+## 2026-07-14 正式图标与安装版
+
+- 用户从四款生成方案中选择第二款：显示器轮廓、对话气泡和方向键组合，暖白背景、深蓝与低饱和青绿/蓝色。
+- 选定源图位于 `user-selected generated image (not stored in the repository)`，已确认文件存在。
+- 当前 WPF 项目没有 `ApplicationIcon`，Inno Setup 也没有 `SetupIconFile`；现有卸载图标和快捷方式会跟随 EXE，因此需要把 ICO 编译进应用并显式用于安装器。
+- 发布脚本会拒绝非空便携版或安装器输出目录，且不执行递归删除；本轮必须使用新的版本化目录。
+- 正式源图已保存为 `assets/OpenGameMate.AppIcon.png`；ICO 包含 16、20、24、32、40、48、64、128、256 九个尺寸层级。
+- 图标已接入 `ApplicationIcon`、托盘关联 EXE 图标和 Inno `SetupIconFile`；快捷方式与卸载项继续从带图标的 EXE 获取图标。
+- Debug 构建 0 警告/0 错误，127/127 测试、全解决方案格式和发布元数据验证通过。
+- 官方 Inno Setup 6.7.3 安装程序取自其不可变 GitHub Release；Windows Authenticode 校验为 `Valid`，发布者为 `Pyrsys B.V.`，随后以当前用户范围安装编译器。
+- Release 构建 0 警告/0 错误，127/127 测试、全解决方案格式与发布元数据验证通过；应用 EXE 和安装器均可提取到所选图标。
+- 最终安装器为 `artifacts/installer/v0.1.0-final/OpenGameMate-Setup-0.1.0.exe`，大小 6,462,453 字节，SHA-256 为 `4473B34F36C876F10EF0BF7FC186E7340B9B4B46468B23591B51A7DD2B2CB769`。
+- 最终安装器和应用 EXE 当前均为 `NotSigned`；该事实已写入发布说明，不能把本地预览包表述为已签名正式发行包。
+- 首次隔离 Release 验证错误地让多个项目共享同一中间目录，造成资产文件覆盖；改为只隔离最终输出、保留项目各自 `obj` 后验证通过，确认不是源码问题。
+
+
 ## 2026-07-14 空闲等待四档配置
 
 - 用户已真实验证提交 `d71fe26` 的 10 秒空闲截图链路和可配置主动截图快捷键通过。
