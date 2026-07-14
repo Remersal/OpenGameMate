@@ -6,6 +6,8 @@ OpenGameMate is an open-source Windows desktop learning project. It opens ChatGP
 
 OpenGameMate is not an OpenAI product, official extension, or unlimited-quota tool.
 
+OpenGameMate is an independent open-source project and is not affiliated with or endorsed by OpenAI.
+
 ## 安全与隐私 / Safety and privacy
 
 - 不读取 ChatGPT 回复、聊天记录、账号、Cookie、Token、完整 HTML 或音频。

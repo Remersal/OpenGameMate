@@ -11,8 +11,37 @@
 # Local runtime and package artifacts
 artifacts/
 logs/
+diagnostics/
+browser-profile/
 userdata/
+UserData/
+EBWebView/
+screenshots/
+TestResults/
+test-results/
+publish/
+installer-output/
+portable/
+*.tmp
+*.temp
+*.zip
+*.7z
+*.rar
+*.exe
+*.msi
+*.msix
+*.appx
+*.nupkg
 *.png
 *.jpg
 *.jpeg
 !assets/OpenGameMate.AppIcon.png
+
+# Machine-local settings and credentials
+.env
+.env.*
+!.env.example
+appsettings.Local.json
+appsettings.Development.json
+settings.local.json
+local.settings.json
