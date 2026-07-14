@@ -18,6 +18,8 @@
 - 已从重写后的源码生成 `artifacts/release/OpenGameMate-v0.1.0-win-x64-public-clean` 和 `artifacts/installer/v0.1.0-public-clean/OpenGameMate-Setup-0.1.0.exe`。
 - 最终验证：127/127 测试、格式、发布元数据、当前树、21 个历史提交、剩余 Git 引用、便携版和安装器隐私扫描均通过；安装包不含 PDB。
 - 最终安装器大小 6,462,035 字节，SHA-256 为 `F7C73284D27C59C55AC80726828BE6476B3BF0EF8E798D95AF70A497E5B1533E`；Authenticode 状态仍为 `NotSigned`，未伪报签名。
+- 历史哈希映射记录提交后已过期全部 reflog 并执行 `git gc --prune=now`；旧 HEAD、旧隐藏 tree 及三个代表性旧提交对象均已无法解析。
+- `git fsck --full --unreachable --no-reflogs` 未发现不可达对象；GC 后逐提交隐私扫描再次通过，仓库只剩清理后的 `master` 引用。
 
 ## 会话：2026-07-14（首次安装账号风险提示）
 
