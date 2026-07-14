@@ -16,4 +16,5 @@
 - Added the user-selected OpenGameMate application icon to the executable, window, tray, shortcuts, uninstaller, and installer package.
 - Added Simplified Chinese and English installer UI with automatic Windows-language selection.
 - Added a mandatory first-install game-account risk acknowledgment that cannot be bypassed by silent installation.
+- Removed local machine paths from tracked documentation, mapped compiler paths to `/_/`, and made release builds fail when local Windows user paths are detected.
 - Archived Phase 0 feasibility evidence and retained its conditional limitations.

@@ -16,6 +16,7 @@ This source revision implements the v0.1.0 Early Preview architecture and produc
 - User-selected OpenGameMate artwork is embedded as the application, window, tray, shortcut, uninstaller, and installer icon.
 - The installer supports Simplified Chinese and English, automatically preferring the matching Windows UI language while allowing manual language selection.
 - First installation requires explicit acknowledgment that third-party companion or automation tools may lead to game-account warnings, restrictions, suspension, or permanent bans; silent installation cannot bypass this warning.
+- Release builds use the virtual `/_/` source root and automatically reject tracked text or packaged binaries containing local Windows user-profile paths.
 
 ### Public-test follow-up
 

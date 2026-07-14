@@ -28,6 +28,7 @@ $version = Get-BuildProperty -Name 'Version'
 $assemblyVersion = Get-BuildProperty -Name 'AssemblyVersion'
 $fileVersion = Get-BuildProperty -Name 'FileVersion'
 $informationalVersion = Get-BuildProperty -Name 'InformationalVersion'
+$pathMap = Get-BuildProperty -Name 'PathMap'
 
 if ($version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
     throw "Release version is invalid: '$version'"
@@ -40,6 +41,10 @@ if ($assemblyVersion -ne "$numericVersion.0" -or $fileVersion -ne "$numericVersi
 
 if ($informationalVersion -ne '$(Version)') {
     throw 'InformationalVersion must be sourced from $(Version).'
+}
+
+if ($pathMap -ne '$(MSBuildThisFileDirectory)=/_/') {
+    throw 'PathMap must map the repository root to the virtual /_/ source path.'
 }
 
 $manifestPath = Join-Path $repositoryRoot 'src\OpenGameMate.App\app.manifest'
@@ -96,7 +101,8 @@ if ($applicationIconProperty.Count -ne 1 -or
 
 $powerShellScripts = @(
     (Join-Path $repositoryRoot 'scripts\Publish-Portable.ps1'),
-    (Join-Path $repositoryRoot 'scripts\Build-Installer.ps1')
+    (Join-Path $repositoryRoot 'scripts\Build-Installer.ps1'),
+    (Join-Path $repositoryRoot 'scripts\Validate-Privacy.ps1')
 )
 foreach ($scriptPath in $powerShellScripts) {
     $tokens = $null
@@ -113,6 +119,11 @@ foreach ($scriptPath in $powerShellScripts) {
     $scriptText = Get-Content -LiteralPath $scriptPath -Raw
     if ($scriptText -match '(?i)Remove-Item[^\r\n]*-Recurse|\brm\s+-rf\b|\brmdir\s+/s\b|\brd\s+/s\b|\bdel\s+/s\b') {
         throw "Release script contains a forbidden recursive delete command: $scriptPath"
+    }
+
+    if ([System.IO.Path]::GetFileName($scriptPath) -ne 'Validate-Privacy.ps1' -and
+        $scriptText.IndexOf('Validate-Privacy.ps1', [StringComparison]::Ordinal) -lt 0) {
+        throw "Release script must run the privacy validator before reporting success: $scriptPath"
     }
 }
 

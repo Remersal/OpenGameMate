@@ -1,5 +1,15 @@
 # 发现与决策
 
+## 2026-07-14 上传前隐私清理
+
+- 泄露路径分为三层：当前 Markdown 文档、旧 Git blob、C# 编译产物中的调试文档路径；只改当前文件不能清除后两层。
+- 当前文档共有 5 处明确的用户目录或仓库绝对路径；旧历史至少由提交 `377a506`、`6a37197`、`4ed6c6e` 引入相关路径。
+- 旧发布目录中的多个 OpenGameMate DLL/PDB 可直接检出本机用户名，证明需要在编译器边界配置确定性的虚拟源码前缀。
+- 采用仓库根级 `PathMap`：将仓库根目录映射到 `/_/`，保留可诊断的仓库相对源文件结构，同时不泄露盘符、用户名或构建机目录。
+- 历史重写后还必须过期 reflog 并立即清理不可达对象，否则直接复制整个 `.git` 目录时旧 blob 仍可能残留。
+- 实测带调试信息的库 DLL 将 CodeView 路径写为 `/_/src/<project>/obj/.../<project>.pdb`，本机路径扫描为零；正式发布 DLL 使用 `DebugType=None`，重编译后不含 PDB 路径。
+- 发布脚本在便携版复制文档后、安装器编译后分别执行同一个隐私验证器；旧泄露产物会失败，新预检便携版与安装包均通过。
+
 ## 2026-07-14 首次安装账号风险提示
 
 - 风险提示必须明确区分“产品技术边界”和“平台执法风险”：不注入、不读游戏内存不能推导出零封号风险。
@@ -20,7 +30,7 @@
 ## 2026-07-14 正式图标与安装版
 
 - 用户从四款生成方案中选择第二款：显示器轮廓、对话气泡和方向键组合，暖白背景、深蓝与低饱和青绿/蓝色。
-- 选定源图位于 `user-selected generated image (not stored in the repository)`，已确认文件存在。
+- 选定源图来自用户确认的第二款图标方案；仓库只保留正式的 `assets/OpenGameMate.AppIcon.png`，不记录本机生成目录。
 - 当前 WPF 项目没有 `ApplicationIcon`，Inno Setup 也没有 `SetupIconFile`；现有卸载图标和快捷方式会跟随 EXE，因此需要把 ICO 编译进应用并显式用于安装器。
 - 发布脚本会拒绝非空便携版或安装器输出目录，且不执行递归删除；本轮必须使用新的版本化目录。
 - 正式源图已保存为 `assets/OpenGameMate.AppIcon.png`；ICO 包含 16、20、24、32、40、48、64、128、256 九个尺寸层级。
@@ -125,7 +135,7 @@
 - 强化提示语后的自动链路总体可用。由于调度只在对话空闲时发送，最终自动随图文字改为要求 ChatGPT 根据最新画面主动发起一个自然、简短的话题并立即语音回应，同时明确避免机械复述或图片分析；附件、调度和提交规则保持不变。
 
 - 仓库初始只有 `.git`，尚无代码或仓库内开发文档。
-- 用户提供的权威文档位于 `OpenGameMate_v0.1.0 development document (external attachment)`。
+- 用户提供的权威开发文档来自仓库外附件；仓库记录其范围结论，不记录附件在本机的绝对路径。
 - 开发文档技术基线为 C# / .NET 8 / WPF / WebView2 / Windows Graphics Capture。
 - 文档将 Voice 会话图片输入和后台/隐藏 WebView2 无焦点提交列为 Go / No-Go 发布阻断项。
 - 页面适配允许检查输入区、上传状态和错误，但禁止读取回复、历史、账号或凭据。
@@ -166,7 +176,7 @@
 
 ## 资源
 
-- `OpenGameMate_v0.1.0 development document (external attachment)`
+- 用户提供的 `OpenGameMate_v0.1.0_开发文档.md`（仓库外附件）
 - 仓库级 `AGENTS.md`
 - OpenAI Voice Mode FAQ：`https://help.openai.com/en/articles/8400625-voice-chat-faq`
 - OpenAI ChatGPT Voice：`https://help.openai.com/en/articles/20001274/`

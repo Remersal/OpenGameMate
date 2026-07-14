@@ -1,6 +1,6 @@
 # OpenGameMate embedded-shell design QA
 
-- Source visual truth: `user-provided UI reference image (not stored in the repository)`
+- Source visual truth: user-provided UI reference image (not stored in the repository)
 - Implementation evidence: Computer Use window capture `screenshot-0`, captured from the Release build at 1468×894. The screenshot is intentionally not persisted because it contains the user's signed-in ChatGPT surface.
 - Source viewport: 1925×1246.
 - Implementation viewport: 1468×894.

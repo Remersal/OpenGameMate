@@ -60,4 +60,6 @@ Copy-Item `
     -LiteralPath $releaseNotes `
     -Destination (Join-Path $output 'RELEASE_NOTES.md')
 
+& (Join-Path $PSScriptRoot 'Validate-Privacy.ps1') -ArtifactPath $output
+
 Write-Host "Portable package created: $output"

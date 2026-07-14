@@ -63,4 +63,6 @@ if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup failed with exit code $LASTEXITCODE"
 }
 
+& (Join-Path $PSScriptRoot 'Validate-Privacy.ps1') -ArtifactPath $installerOutput
+
 Write-Host "Installer package created: $installerOutput"
