@@ -1,10 +1,26 @@
 [CmdletBinding()]
 param(
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\artifacts\release\OpenGameMate-v0.1.0-win-x64')
+    [string]$OutputDirectory,
+    [string]$Version
 )
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    [xml]$buildProperties = Get-Content -LiteralPath (Join-Path $repositoryRoot 'Directory.Build.props') -Raw
+    $Version = [string]$buildProperties.Project.PropertyGroup.Version
+}
+
+if ([string]::IsNullOrWhiteSpace($Version) -or
+    $Version -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+    throw "Release version is missing or invalid: '$Version'"
+}
+
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $OutputDirectory = Join-Path $repositoryRoot "artifacts\release\OpenGameMate-v$Version-win-x64"
+}
+
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 
 if (Test-Path -LiteralPath $output) {
@@ -24,7 +40,7 @@ if (-not (Test-Path -LiteralPath $dotnet)) {
     --runtime win-x64 `
     --self-contained false `
     --output $output `
-    -p:Version=0.1.0 `
+    -p:Version=$Version `
     -p:DebugType=None `
     -p:DebugSymbols=false
 if ($LASTEXITCODE -ne 0) {
@@ -34,5 +50,14 @@ if ($LASTEXITCODE -ne 0) {
 foreach ($fileName in @('README.md', 'LICENSE', 'PRIVACY.md', 'SECURITY.md', 'CHANGELOG.md')) {
     Copy-Item -LiteralPath (Join-Path $repositoryRoot $fileName) -Destination (Join-Path $output $fileName)
 }
+
+$releaseNotes = Join-Path $repositoryRoot "docs\RELEASE_NOTES_$Version.md"
+if (-not (Test-Path -LiteralPath $releaseNotes -PathType Leaf)) {
+    throw "Release notes not found for version ${Version}: $releaseNotes"
+}
+
+Copy-Item `
+    -LiteralPath $releaseNotes `
+    -Destination (Join-Path $output 'RELEASE_NOTES.md')
 
 Write-Host "Portable package created: $output"

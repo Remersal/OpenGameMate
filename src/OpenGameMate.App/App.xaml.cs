@@ -20,8 +20,8 @@ public partial class App : System.Windows.Application
         catch (Exception exception)
         {
             MessageBox.Show(
-                $"OpenGameMate v0.1.0 failed to start / 启动失败：{exception.GetType().Name}\nHRESULT: 0x{exception.HResult:X8}",
-                "OpenGameMate v0.1.0",
+                $"{ProductMetadata.DisplayName} failed to start / 启动失败：{exception.GetType().Name}\nHRESULT: 0x{exception.HResult:X8}",
+                ProductMetadata.DisplayName,
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
             Shutdown(-1);

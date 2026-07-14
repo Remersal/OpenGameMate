@@ -162,7 +162,7 @@ public partial class MainWindow : Window
 
     private void ApplyLocalization()
     {
-        Title = "OpenGameMate v0.1.0";
+        Title = ProductMetadata.DisplayName;
         SubtitleText.Text = T(
             "让 ChatGPT Voice 根据游戏画面自然陪聊",
             "Natural ChatGPT Voice companionship grounded in your game screen");
@@ -201,8 +201,12 @@ public partial class MainWindow : Window
         OpenDataFolderButton.Content = T("打开数据目录", "Open data folder");
         BrowserDataHelpButton.Content = T("浏览器数据清理说明", "Browser-data cleanup help");
         RemoteRulesText.Text = T(
-            "远程规则：未配置官方仓库和签名公钥，安全使用内置规则。",
-            "Remote rules: no official repository and signing key are configured; built-in rules are used safely.");
+            _settings.CheckRemoteAdapterRules
+                ? "远程规则：已请求检查，但当前版本未配置官方仓库和签名公钥；安全使用内置规则。"
+                : "远程规则检查已在设置中禁用；安全使用内置规则。",
+            _settings.CheckRemoteAdapterRules
+                ? "Remote rule checks were requested, but this build has no official repository and signing key; built-in rules are used safely."
+                : "Remote rule checks are disabled in settings; built-in rules are used safely.");
         ActivityGroup.Header = T("活动记录（不含网页内容）", "Activity (no webpage content)");
     }
 
@@ -254,6 +258,13 @@ public partial class MainWindow : Window
                 ? T("ChatGPT 已自动重开一次；请重新开启 Voice 并确认。", "ChatGPT was reopened once. Restart Voice and confirm.")
                 : T("ChatGPT 已打开；登录和 Voice 由你控制。", "ChatGPT opened; sign-in and Voice remain under your control."));
             await SafeLogAsync("browser.initialized", DiagnosticLevel.Information, success: true);
+            await SafeLogAsync(
+                "adapter.rules-selected",
+                DiagnosticLevel.Information,
+                errorCode: _settings.CheckRemoteAdapterRules
+                    ? "remote-unavailable"
+                    : "remote-disabled",
+                success: true);
             await SafeLogAsync(
                 "webview.audio-state",
                 DiagnosticLevel.Information,

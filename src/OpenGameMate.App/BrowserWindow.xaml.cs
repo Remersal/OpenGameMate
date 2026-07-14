@@ -9,6 +9,7 @@ public partial class BrowserWindow : Window
     public BrowserWindow()
     {
         InitializeComponent();
+        Title = $"{ProductMetadata.DisplayName} - ChatGPT";
     }
 
     public WebView2 WebView => BrowserView;

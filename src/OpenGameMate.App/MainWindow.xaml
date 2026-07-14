@@ -1,7 +1,7 @@
 <Window x:Class="OpenGameMate.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="OpenGameMate v0.1.0"
+        Title="OpenGameMate"
         Width="940"
         Height="780"
         MinWidth="760"

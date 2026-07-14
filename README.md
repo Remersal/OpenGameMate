@@ -1,6 +1,6 @@
 # OpenGameMate v0.1.0
 
-OpenGameMate 是一个开源 Windows 桌面学习项目：它在独立 WebView2 中打开 ChatGPT，由用户自行登录和开启 Voice；用户明确开始后，程序每两分钟捕获一次主显示器并把截图与简短提示提交到当前对话。
+OpenGameMate 是一个开源 Windows 桌面学习项目：它在独立 WebView2 中打开 ChatGPT，由用户自行登录和开启 Voice。用户明确开始后，程序在 30 秒后进行首次自动尝试，之后每两分钟尝试更新一次画面；只有当前 ChatGPT 页面和 WebView2 音频持续安全空闲时，才捕获最新主显示器画面并提交简短提示。
 
 OpenGameMate is an open-source Windows desktop learning project. It opens ChatGPT in an isolated WebView2 session under the user's control. After the user explicitly starts companion mode, the first automatic primary-display capture is attempted after 30 seconds and later attempts occur every two minutes. A fresh image and short prompt are submitted only after the current ChatGPT page and WebView2 audio remain safely idle.
 
@@ -12,13 +12,13 @@ OpenGameMate is not an OpenAI product, official extension, or unlimited-quota to
 - 不注入游戏、不读游戏内存、不模拟全局键鼠、不绕过反作弊、验证码、额度或受保护内容。
 - 截图只写入一个应用临时 PNG，提交尝试结束后删除；异常重启不恢复截图或运行状态。
 - 首次开始前必须确认“捕获整个主显示器”的隐私风险。
-- 后台提交的 Phase 0 单次实验证据已通过，但网页结构、账号能力、独占全屏、额度和平台政策仍会变化。
+- 后台图片提交、Voice 忙碌延后、90 秒过期跳过和空闲后主动话题已完成小范围真实验证；网页结构、账号能力、独占全屏、额度和平台政策仍会变化，完整 RC 与长时间稳定性仍需单独验收。
 
 - Does not read ChatGPT replies, history, accounts, cookies, tokens, full HTML, or audio.
 - Does not inject into games, read game memory, synthesize global input, or bypass anti-cheat, verification, quotas, or protected content.
 - Keeps one application temporary PNG and deletes it after each attempt; runtime capture state is not restored after a crash.
 - Requires explicit acknowledgement of full-primary-display capture risk before first start.
-- The Phase 0 background submission path passed a real one-shot test, but webpage structure, account capabilities, fullscreen modes, quotas, and platform policy can change.
+- Background image submission, Voice-busy deferral, 90-second expiry, and proactive idle-time topics passed targeted live checks. Webpage structure, account capabilities, fullscreen modes, quotas, and platform policy can still change; full RC and soak acceptance remain separate gates.
 
 See [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md), and the archived [Phase 0 feasibility report](docs/PHASE0_FEASIBILITY_REPORT.md).
 
@@ -44,6 +44,7 @@ Requirements: Windows 10 19041 or newer, .NET 8 SDK, and a current Microsoft Edg
 
 ```powershell
 dotnet restore .\OpenGameMate.sln
+.\scripts\Validate-ReleaseMetadata.ps1
 dotnet build .\OpenGameMate.sln -c Release
 dotnet test .\tests\OpenGameMate.Tests\OpenGameMate.Tests.csproj -c Release --no-build
 ```
@@ -64,7 +65,9 @@ Installed mode stores operational data under `%LocalAppData%\OpenGameMate\`; por
 
 ## 打包 / Packaging
 
-`scripts\Publish-Portable.ps1` creates a framework-dependent Windows x64 portable folder. `packaging\OpenGameMate.iss` is the Inno Setup installer definition. Both refuse to reuse a non-empty output folder; the repository never performs recursive deletion.
+`scripts\Publish-Portable.ps1` creates a framework-dependent Windows x64 portable folder. Pass a new empty `-OutputDirectory` for every release build. `scripts\Build-Installer.ps1` publishes to that directory and passes its exact path and version to `packaging\OpenGameMate.iss`. Release scripts never clear or reuse a non-empty output folder and never perform recursive deletion.
+
+`scripts\Validate-ReleaseMetadata.ps1` checks the shared .NET version, Windows manifest, versioned Release Notes, release-script syntax, forbidden recursive-delete commands, and required Inno macros without creating an artifact.
 
 ## 已知限制 / Known limitations
 

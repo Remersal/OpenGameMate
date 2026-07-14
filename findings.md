@@ -1,5 +1,40 @@
 # 发现与决策
 
+## 2026-07-14 测试前发布一致性审计
+
+- 当前产品实现与 P0 Voice 调度修复均已提交；最新验收记录提交为 `b3bd032`，工作区恢复为干净状态。
+- 权威开发范围中的核心模块已经存在，剩余开发应收敛到发布文档、版本元数据、便携/安装器脚本和配置边界一致性，不重复开发功能模块。
+- 用户明确要求把测试留到开发最后；本阶段先完成全部代码与文档修改，随后再统一运行格式、构建、自动化测试和发布验证。
+- 本轮记忆索引未找到 OpenGameMate 专项历史条目；当前仓库、开发文档和计划文件继续作为权威证据。
+- README 中文简介仍错误地概括为“每两分钟捕获一次”，而英文和运行时已是首轮 30 秒、后续每两分钟，并在页面/音频安全空闲后才提交；需要双语一致。
+- CHANGELOG 仍是初始 v0.1.0 功能清单，未记录容量 1 PendingSend、最多延后 90 秒、页面/音频稳定门控、提交前二次检查和空闲主动话题。
+- 正确的发布说明文件名是 `docs/RELEASE_NOTES_0.1.0.md`；初次审计使用了不存在的 `docs/V0.1_RELEASE_NOTES.md`，已改为按实际文件清单继续，不重复该路径。
+- 架构说明已覆盖首轮 30 秒、调度和 Voice 安全门控，但隐私安全诊断字段描述仍停留在初始字段，需要同步新增的 PendingSend/音频布尔状态元数据。
+- 测试计划仍把真实证据概括为 Phase 0 单次路径；应补充已完成的 P0 小范围真实验证，同时保留 30 分钟和 2 小时完整 RC 尚未执行的事实。
+- 发布说明仍写“固定两分钟”并声称本版本从未真实启动/发送，已与后续用户真实验收矛盾；需要改为首轮 30 秒、后续两分钟，并区分“已完成小范围真实验证”与“未完成完整 RC/长时浸泡”。
+- 版本号目前分散在 App csproj、manifest、便携脚本和 Inno 定义中。可由 `Directory.Build.props` 统一 .NET 程序集版本，同时让发布脚本通过显式 `-Version` 参数把同一值传给 publish 与 Inno 宏，减少发布漂移。
+- `Build-Installer.ps1` 当前无输出目录参数，总会调用默认便携目录；该目录一旦已有产物就会失败。应允许调用者指定新的空目录，并把实际 source directory 和版本传给 Inno，而不是要求代理清理旧目录。
+- Inno 定义当前把版本、输出文件名和便携源目录分别硬编码为 0.1.0；应改为可由命令行 `/D` 覆盖、保留 0.1.0 安全默认值的宏。
+- `CheckRemoteAdapterRules` 已属于 settings schema v1 且会被默认序列化。直接删除会让已有设置因严格未知字段策略失败；在没有官方仓库与维护者公钥前，保留该兼容字段并明确其安全禁用语义，比无迁移地删除更安全。
+- App、BrowserWindow 和启动错误对话框仍硬编码 `v0.1.0`。仅统一 MSBuild 属性不足以避免 UI 版本漂移；应由 App 在运行时读取程序集 `AssemblyInformationalVersion`，作为窗口标题和错误标题的单一显示来源。
+- 发布脚本初版改造后仍有两个可收敛点：Release Notes 源文件名应由已解析版本派生；Build-Installer 应先确认 Inno 编译器存在，再运行 publish，避免工具缺失时留下无用的半成品便携目录。
+- 仓库级 `AGENTS.md` 的“固定每 2 分钟”仍可理解为后续周期，但没有表达用户批准的首轮 30 秒例外；为避免后续代理误改回两分钟首轮，应同步仓库约束。
+- 最后一轮占位扫描未发现 `TODO`、`FIXME` 或 `NotImplementedException`。隐私关键词仅命中允许的当前 composer 文本写入/回读验证、类型名和安全说明，没有发现读取回复区域、聊天历史、Cookie、Token 或全页正文的新路径。
+- `DiagnosticEvent` 的实际字段与更新后的架构说明一致：只保存有界按钮属性、调度时间、稳定时长、音频布尔状态和失败阶段，不存在音频内容、截图内容、对话正文或路径字段。
+- 运行时版本显示现在可由 `AssemblyInformationalVersion` 派生；静态复核发现该新文件需要显式 `System` 命名空间（App 禁用隐式 using），已在最终测试前修正。
+- 项目引用复核通过：Core 无项目依赖；Diagnostics 只依赖 Core；Adapters 只依赖 Core/Browser；App 是组合根。此次发布一致性修改没有引入反向依赖。
+- 现有 CI 只验证 .NET restore/build/test/format，不会解析 PowerShell 发布脚本或核对 Directory.Build.props、manifest、Release Notes 与 Inno 宏的一致性。应增加一个只读发布元数据验证脚本并纳入 CI，防止未来版本漂移。
+- `ProductMetadata` 的异常回退不应再次硬编码当前版本，否则版本升级仍可能静默显示旧值；回退应明确为 `unknown`，正常构建必须由程序集信息版本提供真实值。
+- 发布一致性开发已完成：版本在 `Directory.Build.props` 统一；运行时标题读取程序集信息版本；便携/安装器接受显式版本和新空目录；CI 增加只读元数据验证；远程规则设置会明确区分禁用与缺少信任锚，同时始终安全使用内置规则。
+- 最终元数据校验首次运行即发现 PowerShell 插值边界错误：错误消息中的 `$Version:` 会被解析成无效变量引用。该问题发生在 publish 前，未生成任何产物；已改用 `${Version}:`。
+- 修正后发布元数据校验通过；全仓 `dotnet format --verify-no-changes` 通过；Release 解决方案构建为 0 警告、0 错误；Release 自动化测试 105/105 通过。
+- 便携发布脚本已在全新目录 `artifacts/verification/OpenGameMate-v0.1.0-win-x64-20260714-180840` 成功执行，没有复用、覆盖或删除旧产物。
+- 本机 `ISCC.exe` 仍不存在；安装器宏、参数链和 PowerShell 语法由元数据校验覆盖，但安装器 EXE 无法在当前环境生成，不能宣称安装器编译通过。
+- 便携目录文件清单和 EXE 版本验证通过；首次压缩命令因 `-LiteralPath` 不展开 `*` 而未生成 ZIP，未修改便携目录，需改用 `-Path` 重试。
+- 改用 `Compress-Archive -Path` 后便携 ZIP 验证通过：31 个条目、7,161,283 字节、SHA-256 `356BFF4F523AFF8515A8760B70F2FF5B6F0A8BC8DC06BE7BBA6D8C4D53F39A7E`。
+- 安装器失败关闭预检通过：指定不存在的 Inno 编译器时，`Build-Installer.ps1` 在 publish 前退出，便携与安装器测试路径均未创建；本机缺工具时不会留下半成品。
+- Inno Setup 官方文档确认 ISCC 支持 `/D<name>[=<value>]`，其行为等价于预处理器 `#define public`，并给出带空格值的引号示例；当前 Build-Installer 的逐参数调用与官方语法一致。来源：https://jrsoftware.org/ishelp/topic_isppcc.htm
+
 ## 需求
 
 - 当前只完成 OpenGameMate Phase 0 技术可行性验证，不构建完整 v0.1.0。

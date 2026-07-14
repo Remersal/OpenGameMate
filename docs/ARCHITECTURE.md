@@ -31,7 +31,7 @@ Both modes use the same child layout: `settings.json`, `logs`, `WebView2`, `temp
 
 ## Privacy-safe diagnostics
 
-Product diagnostics are JSON Lines records with an allowlisted schema: timestamp, level, event token, state, stable error token, success flag, image dimensions, file size and exception type. There is intentionally no arbitrary message, webpage content, prompt, response, account, credential, token, audio or path field.
+Product diagnostics are JSON Lines records with an allowlisted schema: timestamp, level, event token, state, stable error token, success flag, image dimensions, file size, exception type, bounded adapter state/button metadata, PendingSend timestamps/reasons, preparation/submission timestamps, and WebView2 audio-output booleans/durations. There is intentionally no arbitrary message, webpage content, screenshot content, prompt, response, account, credential, cookie, token, audio content or path field.
 
 ## Browser boundary
 
@@ -49,7 +49,7 @@ Capture errors expose stable codes for unsupported systems, missing primary disp
 
 ## Scheduling boundary
 
-`AutomaticSendLoop` emits its first occurrence after 30 seconds and waits a fresh two minutes after each later occurrence completes or is skipped; neither timing is user-configurable. It never performs an immediate retry or retains a missed timer tick for catch-up. Pause and runtime state are supplied as a predicate, and manual submissions do not reset the active delay.
+`AutomaticSendLoop` emits its first occurrence after 30 seconds and waits a fresh two minutes after each later occurrence completes or is skipped; neither timing is user-configurable. A due occurrence creates only one `AutomaticPendingSend`, not a screenshot. The capacity-one slot waits up to 90 seconds for a stable safe state, captures the newest screen only when ready, and discards an expired occurrence without catch-up. It never performs an immediate retry or retains a missed timer tick. Pause and runtime state are supplied as a predicate, and manual submissions do not reset the active delay.
 
 `SubmissionCoordinator` allows one active submission and has no queue. An automatic occurrence yields once before starting so a simultaneous manual request can reserve priority; a running manual submission likewise causes the automatic occurrence to be skipped. An operation that already started is not preempted. `ConversationReminderTracker` raises one reminder after two elapsed hours or 60 successful image submissions, whichever occurs first, and resets only when the user starts a new conversation.
 
@@ -65,6 +65,6 @@ The repository currently has no declared official GitHub remote or maintainer-ow
 
 The App project is the composition root. Startup displays only the main window and restores settings, never capture or runtime state. User actions create the independent ChatGPT window, confirm Voice, optionally send role text, acknowledge full-display privacy risk, and start the scheduler. WebView2 work is dispatched on the WPF thread; fixed timing remains in Core.
 
-Submission composition is capture → prepare image/text → verify attachment/text → invoke one send control → verify composer/attachment state → delete the local PNG. Automatic capture begins only after at least three seconds of audio silence and six seconds of unchanged safe page/audio state. A Voice state change during preparation abandons that occurrence as an ordinary failure without clicking send; it is not an adapter mismatch. `QuotaReached` cancels automatic work and enters `VoiceOnly`; `AdapterInvalid` cancels work and enters `AdapterError`; ordinary failures return to `Running` without an immediate retry. No branch reads a model reply.
+Submission composition is capture → prepare image/text → verify attachment/text → invoke one send control → verify composer/attachment state → delete the local PNG. Automatic capture begins only after at least three seconds of audio silence and six seconds of unchanged safe page/audio state. The safe state requires the expected official origin, exactly one composer, no stop control, an unambiguous send-control state in the target form, and no exact document-level Voice activity control. A Voice or page-state change during preparation abandons that occurrence as an ordinary failure without clicking send; it is not an adapter mismatch. `QuotaReached` cancels automatic work and enters `VoiceOnly`; `AdapterInvalid` cancels work and enters `AdapterError`; ordinary failures return to `Running` without an immediate retry. No branch reads a model reply.
 
 The tray mirrors show/hide browser, send-now, pause/resume, stop, and exit. Closing the browser during a run consumes at most one background recovery and requires explicit Voice confirmation before resuming. Diagnostics export belongs to the Diagnostics module and packages only allowlisted JSONL filenames after a user-selected destination.

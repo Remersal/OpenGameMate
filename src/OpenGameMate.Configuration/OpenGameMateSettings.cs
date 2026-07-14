@@ -18,6 +18,8 @@ public sealed record OpenGameMateSettings
 
     public AppLanguage Language { get; init; } = AppLanguage.System;
 
+    // Retained in schema v1 for compatibility. Runtime checks remain fail-closed until
+    // an official source and maintainer-owned verification key are configured.
     public bool CheckRemoteAdapterRules { get; init; } = true;
 
     public bool ShowPrivacyWarningOnFirstStart { get; init; } = true;

@@ -12,6 +12,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+      - name: Validate release metadata
+        shell: pwsh
+        run: .\scripts\Validate-ReleaseMetadata.ps1
       - name: Restore
         run: dotnet restore .\OpenGameMate.sln
       - name: Build
