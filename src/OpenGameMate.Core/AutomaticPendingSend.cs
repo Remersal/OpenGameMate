@@ -10,10 +10,16 @@ public enum PendingSendObservation
 public sealed class AutomaticPendingSend
 {
     public static readonly TimeSpan MaximumDeferral = TimeSpan.FromSeconds(90);
-    public static readonly TimeSpan MinimumAudioSilence = RuntimePolicy.ConversationIdleCaptureDelay;
-    public static readonly TimeSpan RequiredIdleStability = RuntimePolicy.ConversationIdleCaptureDelay;
 
     public AutomaticPendingSend(DateTimeOffset scheduledAt, DateTimeOffset pendingCreatedAt)
+        : this(scheduledAt, pendingCreatedAt, RuntimePolicy.ConversationIdleCaptureDelay)
+    {
+    }
+
+    public AutomaticPendingSend(
+        DateTimeOffset scheduledAt,
+        DateTimeOffset pendingCreatedAt,
+        TimeSpan requiredIdleStability)
     {
         if (pendingCreatedAt < scheduledAt)
         {
@@ -22,13 +28,25 @@ public sealed class AutomaticPendingSend
                 "Pending creation cannot precede its scheduled occurrence.");
         }
 
+        if (!RuntimePolicy.IsSupportedConversationIdleDelay(requiredIdleStability))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(requiredIdleStability),
+                "Idle stability must use a supported runtime policy value.");
+        }
+
         ScheduledAt = scheduledAt;
         PendingCreatedAt = pendingCreatedAt;
+        RequiredIdleStability = requiredIdleStability;
     }
 
     public DateTimeOffset ScheduledAt { get; }
 
     public DateTimeOffset PendingCreatedAt { get; }
+
+    public TimeSpan RequiredIdleStability { get; }
+
+    public TimeSpan MinimumAudioSilence => RequiredIdleStability;
 
     public DateTimeOffset ExpiresAt => PendingCreatedAt + MaximumDeferral;
 
@@ -97,7 +115,8 @@ public sealed class AutomaticPendingSendSlot
     public bool TryCreate(
         DateTimeOffset scheduledAt,
         DateTimeOffset pendingCreatedAt,
-        out AutomaticPendingSend? pending)
+        out AutomaticPendingSend? pending,
+        TimeSpan? requiredIdleStability = null)
     {
         lock (_sync)
         {
@@ -107,7 +126,10 @@ public sealed class AutomaticPendingSendSlot
                 return false;
             }
 
-            pending = new AutomaticPendingSend(scheduledAt, pendingCreatedAt);
+            pending = new AutomaticPendingSend(
+                scheduledAt,
+                pendingCreatedAt,
+                requiredIdleStability ?? RuntimePolicy.ConversationIdleCaptureDelay);
             _pending = pending;
             return true;
         }

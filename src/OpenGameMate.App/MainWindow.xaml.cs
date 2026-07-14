@@ -57,6 +57,7 @@ public partial class MainWindow : Window
     private bool _browserInitializing;
     private bool _auxiliaryOperation;
     private bool _capturingHotKey;
+    private bool _updatingIdleDelaySelection;
 
     public MainWindow(AppDataPaths paths)
     {
@@ -81,6 +82,9 @@ public partial class MainWindow : Window
     private CompanionPromptLanguage PromptLanguage => IsChinese
         ? CompanionPromptLanguage.ChineseSimplified
         : CompanionPromptLanguage.English;
+
+    private TimeSpan SelectedConversationIdleDelay =>
+        TimeSpan.FromSeconds(_settings.ConversationIdleDelaySeconds);
 
     private string T(string chinese, string english) => IsChinese ? chinese : english;
 
@@ -108,6 +112,7 @@ public partial class MainWindow : Window
         }
 
         SelectLanguageItem(_settings.Language);
+        SelectIdleDelayItem(_settings.ConversationIdleDelaySeconds);
         ApplyLocalization();
         CreateTrayIcon();
         InitializeGlobalHotKey();
@@ -206,6 +211,65 @@ public partial class MainWindow : Window
                 LanguageComboBox.SelectedItem = entry;
                 return;
             }
+        }
+    }
+
+    private async void IdleDelayComboBox_SelectionChanged(
+        object sender,
+        SelectionChangedEventArgs e)
+    {
+        if (!_loaded || _updatingIdleDelaySelection ||
+            IdleDelayComboBox.SelectedItem is not ComboBoxItem item ||
+            item.Tag is not string tag ||
+            !int.TryParse(tag, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) ||
+            seconds is not (10 or 15 or 30 or 60) ||
+            seconds == _settings.ConversationIdleDelaySeconds)
+        {
+            return;
+        }
+
+        var previousSettings = _settings;
+        _settings = _settings with { ConversationIdleDelaySeconds = seconds };
+        try
+        {
+            await _settingsStore.SaveAsync(_settings);
+            AddActivity(T(
+                $"空闲等待已改为 {seconds} 秒；从下一个自动轮次开始生效。",
+                $"Idle wait changed to {seconds} seconds; it applies to the next automatic occurrence."));
+            await SafeLogAsync("idle-delay.updated", DiagnosticLevel.Information, success: true);
+        }
+        catch (Exception exception)
+        {
+            _settings = previousSettings;
+            SelectIdleDelayItem(previousSettings.ConversationIdleDelaySeconds);
+            await ReportExceptionAsync("settings.save-failed", "idle-delay-settings-save", exception);
+        }
+        finally
+        {
+            ApplyLocalization();
+            UpdateUi();
+        }
+    }
+
+    private void SelectIdleDelayItem(int seconds)
+    {
+        _updatingIdleDelaySelection = true;
+        try
+        {
+            foreach (var entry in IdleDelayComboBox.Items.OfType<ComboBoxItem>())
+            {
+                if (entry.Tag is string tag &&
+                    int.TryParse(tag, NumberStyles.None, CultureInfo.InvariantCulture, out var value) &&
+                    value == seconds)
+                {
+                    IdleDelayComboBox.SelectedItem = entry;
+                    return;
+                }
+            }
+        }
+        finally
+        {
+            _updatingIdleDelaySelection = false;
         }
     }
 
@@ -342,6 +406,7 @@ public partial class MainWindow : Window
 
     private void ApplyLocalization()
     {
+        var idleDelaySeconds = _settings.ConversationIdleDelaySeconds;
         Title = ProductMetadata.DisplayName;
         SubtitleText.Text = T(
             "让 ChatGPT Voice 根据游戏画面自然陪聊",
@@ -378,10 +443,18 @@ public partial class MainWindow : Window
             : T("尚未记录角色初始化。", "Role initialization has not been recorded.");
         RunGroup.Header = T("3. 陪玩控制", "3. Companion controls");
         RunInstructionText.Text = T(
-            "ChatGPT 网页音频停止且页面空闲稳定约 10 秒后，才截图并自动发送。",
-            "A screenshot is captured and sent only after ChatGPT web audio stops and the page remains idle for about 10 seconds.");
+            $"ChatGPT 网页音频停止且页面空闲稳定 {idleDelaySeconds} 秒后，才截图并自动发送。",
+            $"A screenshot is captured and sent only after ChatGPT web audio stops and the page remains idle for {idleDelaySeconds} seconds.");
         StartButton.Content = T("开始陪玩", "Start");
         SendNowButton.Content = T("立即发送", "Send now");
+        IdleDelayLabelText.Text = T("空闲等待", "Idle wait");
+        foreach (var entry in IdleDelayComboBox.Items.OfType<ComboBoxItem>())
+        {
+            if (entry.Tag is string tag)
+            {
+                entry.Content = T($"{tag} 秒", $"{tag} sec");
+            }
+        }
         HotKeyLabelText.Text = T("主动截图快捷键", "Capture hotkey");
         ChangeHotKeyButton.Content = _capturingHotKey
             ? T("请按组合键", "Press keys")
@@ -729,8 +802,8 @@ public partial class MainWindow : Window
         var result = MessageBox.Show(
             this,
             T(
-                "OpenGameMate 会在 ChatGPT 网页音频停止且页面空闲连续稳定约 10 秒后，才捕获整个主显示器并发送到当前对话。画面可能包含通知、聊天、账号名或其他私人内容。请先关闭敏感窗口。独占全屏、受保护内容和反作弊环境可能黑屏或失败，程序不会绕过保护。\n\n是否理解风险并开始？",
-                "OpenGameMate captures the entire primary display only after ChatGPT web audio stops and the page remains idle for about 10 seconds, then sends it to the current chat. Notifications, chats, account names, or other private content may be included. Close sensitive windows first. Exclusive fullscreen, protected content, and anti-cheat environments may fail or produce black frames; protections are not bypassed.\n\nDo you understand the risk and want to start?"),
+                $"OpenGameMate 会在 ChatGPT 网页音频停止且页面空闲连续稳定 {_settings.ConversationIdleDelaySeconds} 秒后，才捕获整个主显示器并发送到当前对话。画面可能包含通知、聊天、账号名或其他私人内容。请先关闭敏感窗口。独占全屏、受保护内容和反作弊环境可能黑屏或失败，程序不会绕过保护。\n\n是否理解风险并开始？",
+                $"OpenGameMate captures the entire primary display only after ChatGPT web audio stops and the page remains idle for {_settings.ConversationIdleDelaySeconds} seconds, then sends it to the current chat. Notifications, chats, account names, or other private content may be included. Close sensitive windows first. Exclusive fullscreen, protected content, and anti-cheat environments may fail or produce black frames; protections are not bypassed.\n\nDo you understand the risk and want to start?"),
             T("整屏捕获隐私确认", "Full-display capture privacy confirmation"),
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
@@ -770,8 +843,8 @@ public partial class MainWindow : Window
         _runCancellation = new CancellationTokenSource();
         _automaticLoopTask = RunAutomaticLoopAsync(_runCancellation.Token);
         AddActivity(T(
-            "陪玩已开始；网页音频停止且页面空闲稳定 10 秒后自动发送。",
-            "Companion mode started; automatic capture waits for 10 seconds of stable page and web-audio silence."));
+            $"陪玩已开始；网页音频停止且页面空闲稳定 {_settings.ConversationIdleDelaySeconds} 秒后自动发送。",
+            $"Companion mode started; automatic capture waits for {_settings.ConversationIdleDelaySeconds} seconds of stable page and web-audio silence."));
         _ = SafeLogAsync("run.started", DiagnosticLevel.Information, success: true);
         UpdateUi();
     }
@@ -840,7 +913,11 @@ public partial class MainWindow : Window
         CancellationToken cancellationToken)
     {
         var createdAt = DateTimeOffset.UtcNow;
-        if (!_automaticPendingSendSlot.TryCreate(scheduledAt, createdAt, out var pending) ||
+        if (!_automaticPendingSendSlot.TryCreate(
+                scheduledAt,
+                createdAt,
+                out var pending,
+                SelectedConversationIdleDelay) ||
             pending is null)
         {
             await SafeLogAsync(
@@ -1169,6 +1246,7 @@ public partial class MainWindow : Window
             !await AutomaticGuardIsValidAsync(
                 expectedAudioVersion.Value,
                 expectedPageState.Value,
+                pending.RequiredIdleStability,
                 cancellationToken))
         {
             await SafeLogAsync(
@@ -1194,6 +1272,7 @@ public partial class MainWindow : Window
         if (!await AutomaticGuardIsValidAsync(
                 expectedAudioVersion.Value,
                 expectedPageState.Value,
+                pending.RequiredIdleStability,
                 cancellationToken))
         {
             await SafeLogAsync(
@@ -1289,7 +1368,7 @@ public partial class MainWindow : Window
         var submitStartedAt = DateTimeOffset.UtcNow;
         var submission = await _adapter.SubmitPreparedInputOnceAsync(
             expectedAudioVersion.Value,
-            AutomaticPendingSend.RequiredIdleStability,
+            pending.RequiredIdleStability,
             expectedPreparedPageState,
             cancellationToken);
         await SafeLogAsync(
@@ -1330,6 +1409,7 @@ public partial class MainWindow : Window
     private async Task<bool> AutomaticGuardIsValidAsync(
         long expectedAudioVersion,
         AdapterPageState expectedPageState,
+        TimeSpan requiredIdleStability,
         CancellationToken cancellationToken)
     {
         if (_browserSession is null || _adapter is null)
@@ -1339,7 +1419,7 @@ public partial class MainWindow : Window
 
         var audio = _browserSession.GetAudioSnapshot(DateTimeOffset.UtcNow);
         if (!audio.IsKnown || audio.IsPlaying || audio.Version != expectedAudioVersion ||
-            audio.SilentDuration < AutomaticPendingSend.RequiredIdleStability)
+            audio.SilentDuration < requiredIdleStability)
         {
             return false;
         }
@@ -1379,7 +1459,7 @@ public partial class MainWindow : Window
 
             var audio = _browserSession.GetAudioSnapshot(DateTimeOffset.UtcNow);
             if (!audio.IsKnown || audio.IsPlaying || audio.Version != expectedAudioVersion ||
-                audio.SilentDuration < AutomaticPendingSend.RequiredIdleStability)
+                audio.SilentDuration < pending.RequiredIdleStability)
             {
                 return new(false, true, false, lastProbe);
             }
@@ -1491,7 +1571,9 @@ public partial class MainWindow : Window
         else if (_stateMachine.State == GameMateState.Paused)
         {
             ApplyTrigger(GameMateTrigger.Resume);
-            AddActivity(T("已恢复；重新等待连续 10 秒空闲。", "Resumed; waiting for a fresh 10-second idle window."));
+            AddActivity(T(
+                $"已恢复；重新等待连续 {_settings.ConversationIdleDelaySeconds} 秒空闲。",
+                $"Resumed; waiting for a fresh {_settings.ConversationIdleDelaySeconds}-second idle window."));
         }
 
         UpdateUi();
@@ -1669,10 +1751,12 @@ public partial class MainWindow : Window
         GameMateState.BrowserReady => T("浏览器已就绪；请登录、开启 Voice 并确认。", "Browser ready; sign in, start Voice, and confirm."),
         GameMateState.Ready => T("Voice 已确认；可发送角色设定或开始陪玩。", "Voice confirmed; initialize the role or start."),
         GameMateState.Running => T(
-            "正在运行；网页音频停止且页面空闲稳定 10 秒后自动发送。",
-            "Running; automatic capture waits for 10 seconds of stable page and web-audio silence."),
+            $"正在运行；网页音频停止且页面空闲稳定 {_settings.ConversationIdleDelaySeconds} 秒后自动发送。",
+            $"Running; automatic capture waits for {_settings.ConversationIdleDelaySeconds} seconds of stable page and web-audio silence."),
         GameMateState.Sending => T("正在处理一张截图；不会并发或排队。", "Processing one screenshot; no concurrency or queue."),
-        GameMateState.Paused => T("已暂停；恢复后重新等待 10 秒空闲。", "Paused; a fresh 10-second idle window is required after resuming."),
+        GameMateState.Paused => T(
+            $"已暂停；恢复后重新等待 {_settings.ConversationIdleDelaySeconds} 秒空闲。",
+            $"Paused; a fresh {_settings.ConversationIdleDelaySeconds}-second idle window is required after resuming."),
         GameMateState.VoiceOnly => T("图片额度受限；保持纯语音，不再自动发送。", "Image quota limited; Voice-only mode, no more automatic sends."),
         GameMateState.AdapterError => T("网页适配失效；已停止发送。", "Web adapter failed; sending is stopped."),
         GameMateState.Stopped => T("已停止；若要重新开始，请再次确认 Voice。", "Stopped; confirm Voice again to restart."),

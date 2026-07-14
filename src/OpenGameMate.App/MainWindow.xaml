@@ -268,7 +268,7 @@
                                            FontSize="12"
                                            LineHeight="18"
                                            TextWrapping="Wrap"
-                                           Text="网页音频停止且页面空闲稳定约 10 秒后自动发送。" />
+                                           Text="网页音频停止且页面空闲稳定所选时长后自动发送。" />
                                 <WrapPanel Margin="0,8,0,0">
                                     <Button x:Name="StartButton"
                                             Margin="0,0,7,7"
@@ -288,6 +288,29 @@
                                             Click="StopButton_Click"
                                             Content="停止" />
                                 </WrapPanel>
+                                <Grid Margin="0,1,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="IdleDelayLabelText"
+                                               Margin="0,0,8,0"
+                                               VerticalAlignment="Center"
+                                               Foreground="{StaticResource SecondaryTextBrush}"
+                                               FontSize="12"
+                                               Text="空闲等待" />
+                                    <ComboBox x:Name="IdleDelayComboBox"
+                                              Grid.Column="1"
+                                              MinWidth="92"
+                                              Height="30"
+                                              SelectionChanged="IdleDelayComboBox_SelectionChanged">
+                                        <ComboBoxItem Tag="10" Content="10 秒" />
+                                        <ComboBoxItem Tag="15" Content="15 秒" />
+                                        <ComboBoxItem Tag="30" Content="30 秒" />
+                                        <ComboBoxItem Tag="60" Content="60 秒" />
+                                    </ComboBox>
+                                </Grid>
                                 <Grid Margin="0,1,0,8">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />

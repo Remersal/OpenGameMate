@@ -50,6 +50,11 @@ public sealed class StateMachineTests
     public void RuntimePolicy_IsFixedForVersionZeroPointOne()
     {
         Assert.Equal(TimeSpan.FromSeconds(10), RuntimePolicy.ConversationIdleCaptureDelay);
+        Assert.Equal([10, 15, 30, 60], RuntimePolicy.SupportedConversationIdleDelaySeconds);
+        Assert.All(
+            RuntimePolicy.SupportedConversationIdleDelaySeconds,
+            seconds => Assert.True(RuntimePolicy.IsSupportedConversationIdleDelay(TimeSpan.FromSeconds(seconds))));
+        Assert.False(RuntimePolicy.IsSupportedConversationIdleDelay(TimeSpan.FromSeconds(20)));
         Assert.Equal(TimeSpan.FromMilliseconds(250), RuntimePolicy.ConversationIdlePollInterval);
         Assert.Equal(TimeSpan.FromHours(2), RuntimePolicy.ConversationReminderAfter);
         Assert.Equal(60, RuntimePolicy.ConversationReminderAfterSuccessfulImages);

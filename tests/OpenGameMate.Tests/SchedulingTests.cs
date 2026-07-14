@@ -257,11 +257,16 @@ public sealed class SchedulingTests
         Assert.True(slot.TryCreate(now.AddMinutes(2), now.AddMinutes(2), out _));
     }
 
-    [Fact]
-    public void PendingSend_RequiresTenStableAndSilentSeconds()
+    [Theory]
+    [InlineData(10)]
+    [InlineData(15)]
+    [InlineData(30)]
+    [InlineData(60)]
+    public void PendingSend_RequiresSelectedStableAndSilentDuration(int selectedSeconds)
     {
         var now = DateTimeOffset.Parse("2026-07-14T10:00:00+00:00");
-        var pending = new AutomaticPendingSend(now, now);
+        var requiredDelay = TimeSpan.FromSeconds(selectedSeconds);
+        var pending = new AutomaticPendingSend(now, now, requiredDelay);
 
         Assert.Equal(
             PendingSendObservation.Waiting,
@@ -269,27 +274,41 @@ public sealed class SchedulingTests
         Assert.Equal(
             PendingSendObservation.Waiting,
             pending.Observe(
-                now.AddMilliseconds(9999),
+                now.Add(requiredDelay).AddMilliseconds(-1),
                 pageIdle: true,
                 audioSilent: true,
-                TimeSpan.FromMilliseconds(9999),
+                requiredDelay.Add(TimeSpan.FromMilliseconds(-1)),
                 "idle-stabilizing"));
         Assert.Equal(
             PendingSendObservation.Waiting,
             pending.Observe(
-                now.AddSeconds(10),
+                now.Add(requiredDelay),
                 pageIdle: true,
                 audioSilent: true,
-                TimeSpan.FromMilliseconds(9999),
+                requiredDelay.Add(TimeSpan.FromMilliseconds(-1)),
                 "idle-stabilizing"));
         Assert.Equal(
             PendingSendObservation.Ready,
             pending.Observe(
-                now.AddMilliseconds(10001),
+                now.Add(requiredDelay),
                 pageIdle: true,
                 audioSilent: true,
-                TimeSpan.FromSeconds(10),
+                requiredDelay,
                 "idle-stabilizing"));
+
+        Assert.Equal(requiredDelay, pending.RequiredIdleStability);
+        Assert.Equal(requiredDelay, pending.MinimumAudioSilence);
+    }
+
+    [Fact]
+    public void PendingSlot_SnapshotsSelectedDelayForCreatedOccurrence()
+    {
+        var slot = new AutomaticPendingSendSlot();
+        var now = DateTimeOffset.Parse("2026-07-14T10:00:00+00:00");
+
+        Assert.True(slot.TryCreate(now, now, out var pending, TimeSpan.FromSeconds(30)));
+
+        Assert.Equal(TimeSpan.FromSeconds(30), pending?.RequiredIdleStability);
     }
 
     [Fact]

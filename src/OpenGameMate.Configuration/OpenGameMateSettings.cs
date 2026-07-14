@@ -29,6 +29,8 @@ public sealed record OpenGameMateSettings
     public string ManualCaptureHotKey { get; init; } =
         global::OpenGameMate.Configuration.ManualCaptureHotKey.DefaultGesture;
 
+    public int ConversationIdleDelaySeconds { get; init; } = 10;
+
     public void Validate()
     {
         if (SchemaVersion != CurrentSchemaVersion)
@@ -43,6 +45,12 @@ public sealed record OpenGameMateSettings
         }
 
         _ = global::OpenGameMate.Configuration.ManualCaptureHotKey.Parse(ManualCaptureHotKey);
+
+        if (ConversationIdleDelaySeconds is not (10 or 15 or 30 or 60))
+        {
+            throw new ConfigurationValidationException(
+                "Conversation idle delay must be 10, 15, 30, or 60 seconds.");
+        }
     }
 }
 

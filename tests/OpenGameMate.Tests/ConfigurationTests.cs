@@ -33,6 +33,7 @@ public sealed class ConfigurationTests
                 CheckRemoteAdapterRules = false,
                 ShowPrivacyWarningOnFirstStart = false,
                 ManualCaptureHotKey = "Ctrl+Shift+F9",
+                ConversationIdleDelaySeconds = 30,
             };
 
             await store.SaveAsync(expected);
@@ -74,6 +75,53 @@ public sealed class ConfigurationTests
         var settings = new OpenGameMateSettings { ManualCaptureHotKey = "F10" };
 
         Assert.Throws<ConfigurationValidationException>(() => settings.Validate());
+    }
+
+    [Theory]
+    [InlineData(10)]
+    [InlineData(15)]
+    [InlineData(30)]
+    [InlineData(60)]
+    public void Settings_AcceptsSupportedConversationIdleDelays(int seconds)
+    {
+        var settings = new OpenGameMateSettings { ConversationIdleDelaySeconds = seconds };
+
+        settings.Validate();
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(9)]
+    [InlineData(11)]
+    [InlineData(61)]
+    public void Settings_RejectsUnsupportedConversationIdleDelays(int seconds)
+    {
+        var settings = new OpenGameMateSettings { ConversationIdleDelaySeconds = seconds };
+
+        Assert.Throws<ConfigurationValidationException>(() => settings.Validate());
+    }
+
+    [Fact]
+    public async Task JsonStore_LoadsExistingSchemaOneSettingsWithDefaultIdleDelay()
+    {
+        var testDirectory = CreateTestDirectory();
+        var settingsFile = Path.Combine(testDirectory, "settings.json");
+        try
+        {
+            await File.WriteAllTextAsync(
+                settingsFile,
+                """{"schemaVersion":1,"language":"system","checkRemoteAdapterRules":true,"showPrivacyWarningOnFirstStart":true,"rolePromptSent":false,"manualCaptureHotKey":"Ctrl+Alt+F10"}""");
+            var store = new JsonAppSettingsStore(settingsFile);
+
+            var settings = await store.LoadAsync();
+
+            Assert.Equal(10, settings.ConversationIdleDelaySeconds);
+        }
+        finally
+        {
+            DeleteSingleFile(settingsFile);
+            DeleteEmptyDirectory(testDirectory);
+        }
     }
 
     [Fact]
