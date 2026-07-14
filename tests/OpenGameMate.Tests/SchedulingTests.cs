@@ -105,7 +105,301 @@ public sealed class SchedulingTests
     {
         var loop = new AutomaticSendLoop();
 
+        Assert.Equal(TimeSpan.FromSeconds(30), loop.InitialDelay);
         Assert.Equal(TimeSpan.FromMinutes(2), loop.Interval);
+    }
+
+    [Fact]
+    public async Task AutomaticLoop_FiresFirstAtThirtySecondsThenTwoMinutesLater()
+    {
+        var startedAt = new DateTimeOffset(2026, 7, 14, 10, 0, 0, TimeSpan.Zero);
+        var timeProvider = new ManualTimeProvider(startedAt);
+        var loop = new AutomaticSendLoop(timeProvider);
+        using var cancellation = new CancellationTokenSource();
+        var occurrences = new List<DateTimeOffset>();
+        var firstOccurrence = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondOccurrence = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var loopTask = loop.RunAsync(
+            () => true,
+            (scheduledAt, _) =>
+            {
+                occurrences.Add(scheduledAt);
+                if (occurrences.Count == 1)
+                {
+                    firstOccurrence.TrySetResult();
+                }
+                else if (occurrences.Count == 2)
+                {
+                    secondOccurrence.TrySetResult();
+                    cancellation.Cancel();
+                }
+
+                return Task.CompletedTask;
+            },
+            cancellation.Token);
+
+        await WaitForTimerAsync(timeProvider);
+        timeProvider.Advance(TimeSpan.FromSeconds(29));
+        Assert.Empty(occurrences);
+
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+        await firstOccurrence.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal([startedAt.AddSeconds(30)], occurrences);
+
+        await WaitForTimerAsync(timeProvider);
+        timeProvider.Advance(TimeSpan.FromMinutes(2).Subtract(TimeSpan.FromMilliseconds(1)));
+        Assert.Single(occurrences);
+
+        timeProvider.Advance(TimeSpan.FromMilliseconds(1));
+        await secondOccurrence.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(
+            [startedAt.AddSeconds(30), startedAt.AddSeconds(30).AddMinutes(2)],
+            occurrences);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => loopTask);
+    }
+
+    [Fact]
+    public async Task AutomaticLoop_SkipsPausedInitialOccurrenceWithoutResettingCadence()
+    {
+        var startedAt = new DateTimeOffset(2026, 7, 14, 10, 0, 0, TimeSpan.Zero);
+        var timeProvider = new ManualTimeProvider(startedAt);
+        var loop = new AutomaticSendLoop(timeProvider);
+        using var cancellation = new CancellationTokenSource();
+        var running = false;
+        DateTimeOffset? occurrence = null;
+        var occurrenceRaised = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var loopTask = loop.RunAsync(
+            () => running,
+            (scheduledAt, _) =>
+            {
+                occurrence = scheduledAt;
+                occurrenceRaised.TrySetResult();
+                cancellation.Cancel();
+                return Task.CompletedTask;
+            },
+            cancellation.Token);
+
+        await WaitForTimerAsync(timeProvider);
+        timeProvider.Advance(TimeSpan.FromSeconds(30));
+        Assert.Null(occurrence);
+
+        running = true;
+        await WaitForTimerAsync(timeProvider);
+        timeProvider.Advance(TimeSpan.FromMinutes(2));
+        await occurrenceRaised.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(startedAt.AddSeconds(30).AddMinutes(2), occurrence);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => loopTask);
+    }
+
+    [Fact]
+    public async Task AutomaticLoop_DoesNotCatchUpAfterAnOccurrenceRunsPastTheInterval()
+    {
+        var startedAt = new DateTimeOffset(2026, 7, 14, 10, 0, 0, TimeSpan.Zero);
+        var timeProvider = new ManualTimeProvider(startedAt);
+        var loop = new AutomaticSendLoop(timeProvider);
+        using var cancellation = new CancellationTokenSource();
+        var releaseFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var occurrences = new List<DateTimeOffset>();
+
+        var loopTask = loop.RunAsync(
+            () => true,
+            async (scheduledAt, _) =>
+            {
+                occurrences.Add(scheduledAt);
+                if (occurrences.Count == 1)
+                {
+                    firstStarted.TrySetResult();
+                    await releaseFirst.Task;
+                }
+                else
+                {
+                    secondStarted.TrySetResult();
+                    cancellation.Cancel();
+                }
+            },
+            cancellation.Token);
+
+        await WaitForTimerAsync(timeProvider);
+        timeProvider.Advance(TimeSpan.FromSeconds(30));
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        timeProvider.Advance(TimeSpan.FromMinutes(10));
+        Assert.Single(occurrences);
+
+        releaseFirst.TrySetResult();
+        await WaitForTimerAsync(timeProvider);
+        Assert.Single(occurrences);
+
+        timeProvider.Advance(TimeSpan.FromMinutes(2));
+        await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(
+            [startedAt.AddSeconds(30), startedAt.AddMinutes(12).AddSeconds(30)],
+            occurrences);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => loopTask);
+    }
+
+    private static async Task WaitForTimerAsync(ManualTimeProvider timeProvider)
+    {
+        for (var attempt = 0; attempt < 100 && timeProvider.ActiveTimerCount == 0; attempt++)
+        {
+            await Task.Yield();
+        }
+
+        Assert.Equal(1, timeProvider.ActiveTimerCount);
+    }
+
+    [Fact]
+    public void PendingSlot_HasStrictCapacityOfOneAndCanBeReleased()
+    {
+        var slot = new AutomaticPendingSendSlot();
+        var now = DateTimeOffset.Parse("2026-07-14T10:00:00+00:00");
+
+        Assert.True(slot.TryCreate(now, now, out var first));
+        Assert.NotNull(first);
+        Assert.False(slot.TryCreate(now.AddMinutes(2), now.AddMinutes(2), out var duplicate));
+        Assert.Null(duplicate);
+        Assert.Equal(1, slot.Count);
+
+        slot.Release(first!);
+
+        Assert.Equal(0, slot.Count);
+        Assert.True(slot.TryCreate(now.AddMinutes(2), now.AddMinutes(2), out _));
+    }
+
+    [Fact]
+    public void PendingSend_RequiresSixStableSecondsAndAtLeastThreeSilentSeconds()
+    {
+        var now = DateTimeOffset.Parse("2026-07-14T10:00:00+00:00");
+        var pending = new AutomaticPendingSend(now, now);
+
+        Assert.Equal(
+            PendingSendObservation.Waiting,
+            pending.Observe(now, pageIdle: true, audioSilent: true, TimeSpan.Zero, "idle-stabilizing"));
+        Assert.Equal(
+            PendingSendObservation.Waiting,
+            pending.Observe(
+                now.AddMilliseconds(2999),
+                pageIdle: true,
+                audioSilent: true,
+                TimeSpan.FromMilliseconds(2999),
+                "idle-stabilizing"));
+        Assert.Equal(
+            PendingSendObservation.Waiting,
+            pending.Observe(
+                now.AddSeconds(3),
+                pageIdle: true,
+                audioSilent: true,
+                TimeSpan.FromSeconds(3),
+                "idle-stabilizing"));
+        Assert.Equal(
+            PendingSendObservation.Waiting,
+            pending.Observe(
+                now.AddMilliseconds(5999),
+                pageIdle: true,
+                audioSilent: true,
+                TimeSpan.FromMilliseconds(5999),
+                "idle-stabilizing"));
+        Assert.Equal(
+            PendingSendObservation.Waiting,
+            pending.Observe(
+                now.AddSeconds(6),
+                pageIdle: true,
+                audioSilent: true,
+                TimeSpan.FromMilliseconds(2999),
+                "idle-stabilizing"));
+        Assert.Equal(
+            PendingSendObservation.Ready,
+            pending.Observe(
+                now.AddMilliseconds(6001),
+                pageIdle: true,
+                audioSilent: true,
+                TimeSpan.FromSeconds(6),
+                "idle-stabilizing"));
+    }
+
+    [Fact]
+    public void PendingSend_DoesNotTreatFiveSecondVoiceGapAsIdle()
+    {
+        var now = DateTimeOffset.Parse("2026-07-14T10:00:00+00:00");
+        var pending = new AutomaticPendingSend(now, now);
+
+        pending.Observe(now, true, true, TimeSpan.Zero, "idle-stabilizing");
+
+        Assert.Equal(
+            PendingSendObservation.Waiting,
+            pending.Observe(
+                now.AddMilliseconds(5200),
+                true,
+                true,
+                TimeSpan.FromMilliseconds(5200),
+                "idle-stabilizing"));
+        Assert.Equal(
+            PendingSendObservation.Waiting,
+            pending.Observe(
+                now.AddMilliseconds(5210),
+                true,
+                false,
+                TimeSpan.Zero,
+                "audio-playing"));
+        Assert.Null(pending.IdleCandidateAt);
+    }
+
+    [Fact]
+    public void PendingSend_BusyObservationResetsIdleCandidate()
+    {
+        var now = DateTimeOffset.Parse("2026-07-14T10:00:00+00:00");
+        var pending = new AutomaticPendingSend(now, now);
+
+        pending.Observe(now, true, true, TimeSpan.FromSeconds(3), "idle-stabilizing");
+        pending.Observe(now.AddSeconds(2), false, true, TimeSpan.FromSeconds(5), "stop-button-present");
+
+        Assert.Null(pending.IdleCandidateAt);
+        Assert.Equal("stop-button-present", pending.DeferredReason);
+        Assert.Equal(
+            PendingSendObservation.Waiting,
+            pending.Observe(
+                now.AddSeconds(3),
+                true,
+                true,
+                TimeSpan.FromSeconds(6),
+                "idle-stabilizing"));
+    }
+
+    [Fact]
+    public void PendingSend_ExpiresAfterNinetySecondsWithoutBacklog()
+    {
+        var now = DateTimeOffset.Parse("2026-07-14T10:00:00+00:00");
+        var pending = new AutomaticPendingSend(now, now);
+
+        Assert.Equal(
+            PendingSendObservation.Waiting,
+            pending.Observe(
+                now.AddSeconds(89),
+                pageIdle: false,
+                audioSilent: false,
+                TimeSpan.Zero,
+                "audio-playing"));
+        Assert.Equal(
+            PendingSendObservation.Expired,
+            pending.Observe(
+                now.AddSeconds(90),
+                pageIdle: false,
+                audioSilent: false,
+                TimeSpan.Zero,
+                "audio-playing"));
+        Assert.True(pending.SkippedBecauseConversationBusy);
+        Assert.Equal(now.AddSeconds(90), pending.PendingExpiredAt);
     }
 
     [Fact]
@@ -138,5 +432,153 @@ public sealed class SchedulingTests
 
         Assert.Equal(0, tracker.SuccessfulImages);
         Assert.False(tracker.TryRaiseReminder(restartedAt.AddMinutes(1), out _));
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset initialUtcNow) : TimeProvider
+    {
+        private readonly object _sync = new();
+        private readonly List<ManualTimer> _timers = [];
+        private DateTimeOffset _utcNow = initialUtcNow;
+
+        public int ActiveTimerCount
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _timers.Count(timer => timer.IsActive);
+                }
+            }
+        }
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            lock (_sync)
+            {
+                return _utcNow;
+            }
+        }
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            ArgumentNullException.ThrowIfNull(callback);
+            var timer = new ManualTimer(this, callback, state);
+            lock (_sync)
+            {
+                _timers.Add(timer);
+                timer.ChangeCore(dueTime, period);
+            }
+
+            return timer;
+        }
+
+        public void Advance(TimeSpan amount)
+        {
+            if (amount < TimeSpan.Zero)
+            {
+                throw new ArgumentOutOfRangeException(nameof(amount));
+            }
+
+            DateTimeOffset target;
+            lock (_sync)
+            {
+                target = _utcNow + amount;
+            }
+
+            while (true)
+            {
+                ManualTimer? next;
+                lock (_sync)
+                {
+                    next = _timers
+                        .Where(timer => timer.DueAt is not null && timer.DueAt <= target)
+                        .OrderBy(timer => timer.DueAt)
+                        .FirstOrDefault();
+                    if (next is null)
+                    {
+                        _utcNow = target;
+                        return;
+                    }
+
+                    _utcNow = next.DueAt!.Value;
+                    next.ScheduleNextCore();
+                }
+
+                next.Invoke();
+            }
+        }
+
+        private sealed class ManualTimer(
+            ManualTimeProvider owner,
+            TimerCallback callback,
+            object? state) : ITimer
+        {
+            private TimeSpan _period = Timeout.InfiniteTimeSpan;
+            private bool _disposed;
+
+            public DateTimeOffset? DueAt { get; private set; }
+
+            public bool IsActive => !_disposed && DueAt is not null;
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                lock (owner._sync)
+                {
+                    if (_disposed)
+                    {
+                        return false;
+                    }
+
+                    ChangeCore(dueTime, period);
+                    return true;
+                }
+            }
+
+            public void Dispose()
+            {
+                lock (owner._sync)
+                {
+                    _disposed = true;
+                    DueAt = null;
+                }
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+
+            public void Invoke() => callback(state);
+
+            public void ChangeCore(TimeSpan dueTime, TimeSpan period)
+            {
+                ValidateTimerValue(dueTime, nameof(dueTime));
+                ValidateTimerValue(period, nameof(period));
+                _period = period;
+                DueAt = dueTime == Timeout.InfiniteTimeSpan
+                    ? null
+                    : owner._utcNow + dueTime;
+            }
+
+            public void ScheduleNextCore()
+            {
+                DueAt = !_disposed && _period != Timeout.InfiniteTimeSpan
+                    ? owner._utcNow + _period
+                    : null;
+            }
+
+            private static void ValidateTimerValue(TimeSpan value, string name)
+            {
+                if (value < TimeSpan.Zero && value != Timeout.InfiniteTimeSpan)
+                {
+                    throw new ArgumentOutOfRangeException(name);
+                }
+            }
+        }
     }
 }

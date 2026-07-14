@@ -2,7 +2,7 @@
 
 OpenGameMate 是一个开源 Windows 桌面学习项目：它在独立 WebView2 中打开 ChatGPT，由用户自行登录和开启 Voice；用户明确开始后，程序每两分钟捕获一次主显示器并把截图与简短提示提交到当前对话。
 
-OpenGameMate is an open-source Windows desktop learning project. It opens ChatGPT in an isolated WebView2 session under the user's control. After the user explicitly starts companion mode, it captures the primary display every two minutes and submits the image with a short prompt to the current chat.
+OpenGameMate is an open-source Windows desktop learning project. It opens ChatGPT in an isolated WebView2 session under the user's control. After the user explicitly starts companion mode, the first automatic primary-display capture is attempted after 30 seconds and later attempts occur every two minutes. A fresh image and short prompt are submitted only after the current ChatGPT page and WebView2 audio remain safely idle.
 
 OpenGameMate is not an OpenAI product, official extension, or unlimited-quota tool.
 

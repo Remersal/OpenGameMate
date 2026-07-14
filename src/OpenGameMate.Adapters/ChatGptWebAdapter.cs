@@ -7,6 +7,10 @@ namespace OpenGameMate.Adapters;
 
 public interface IAiWebAdapter
 {
+    Task<InputPreparationResult> PrepareImageAsync(
+        string imagePath,
+        CancellationToken cancellationToken = default);
+
     Task<TextPreparationResult> PrepareTextAsync(
         string message,
         CancellationToken cancellationToken = default);
@@ -17,6 +21,14 @@ public interface IAiWebAdapter
         CancellationToken cancellationToken = default);
 
     Task<SubmissionResult> SubmitAsync(CancellationToken cancellationToken = default);
+
+    Task<AdapterIdleProbeResult> ProbeIdleAsync(CancellationToken cancellationToken = default);
+
+    Task<SubmissionResult> SubmitPreparedInputOnceAsync(
+        long expectedAudioStateVersion,
+        TimeSpan requiredSilentDuration,
+        AdapterPageState expectedPageState,
+        CancellationToken cancellationToken = default);
 }
 
 public enum SubmitControlDecision
@@ -55,7 +67,27 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
     {
         try
         {
-            return await PrepareInputCoreAsync(imagePath, message, cancellationToken);
+            return await PrepareInputCoreAsync(imagePath, message, insertText: true, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or JsonException or IOException or
+                UnauthorizedAccessException or COMException)
+        {
+            return new(false, false, false, "adapter-operation-failed", WebAdapterStatus.AdapterInvalid);
+        }
+    }
+
+    public async Task<InputPreparationResult> PrepareImageAsync(
+        string imagePath,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await PrepareInputCoreAsync(imagePath, message: null, insertText: false, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -71,7 +103,8 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
 
     private async Task<InputPreparationResult> PrepareInputCoreAsync(
         string imagePath,
-        string message,
+        string? message,
+        bool insertText,
         CancellationToken cancellationToken)
     {
         if (!_session.IsInitialized || !_session.IsOnChatGpt())
@@ -79,7 +112,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             return new(false, false, false, "not-on-chatgpt", WebAdapterStatus.NotReady);
         }
 
-        if (!IsMessageValid(message))
+        if (insertText && (message is null || !IsMessageValid(message)))
         {
             return new(false, false, false, "message-invalid", WebAdapterStatus.InvalidInput);
         }
@@ -200,10 +233,18 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             return new(false, false, false, GetCode(locateFileInput), WebAdapterStatus.AdapterInvalid);
         }
 
-        var inputResult = await InsertTextAsync(message, composerSelectorJson);
+        var inputFileSelected = false;
+        var inputTextInserted = false;
+        if (insertText)
+        {
+            var inputResult = await InsertTextAsync(message!, composerSelectorJson);
+            inputFileSelected = GetBoolean(inputResult, "fileSelected");
+            inputTextInserted = GetBoolean(inputResult, "textInserted");
+        }
 
         await Task.Delay(750, cancellationToken);
-        var messageJson = JsonSerializer.Serialize(message);
+        var messageJson = JsonSerializer.Serialize(message ?? string.Empty);
+        var expectTextJson = insertText ? "true" : "false";
         var probeResult = await EvaluateAsync(
             $$"""
             (() => {
@@ -221,7 +262,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 fileSelected: fileInput?.files?.length === 1,
                 previewDetected: previewSelectors.some(selector => scope.querySelector(selector)) ||
                   Boolean(scope.querySelector('img[src^="blob:"]')),
-                textInserted: actual === {{messageJson}},
+                textInserted: {{expectTextJson}} && actual === {{messageJson}},
                 quotaDetected: quotaSelectors.some(selector => document.querySelector(selector)),
                 platformErrorDetected: platformErrorSelectors.some(selector => document.querySelector(selector))
               };
@@ -229,14 +270,14 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             """);
 
         var fileSelected = GetBoolean(probeResult, "fileSelected") ||
-            GetBoolean(inputResult, "fileSelected") ||
+            inputFileSelected ||
             GetBoolean(attachmentResult, "fileSelected");
         var previewDetected = GetBoolean(probeResult, "previewDetected");
         var textInserted = GetBoolean(probeResult, "textInserted") ||
-            GetBoolean(inputResult, "textInserted");
+            inputTextInserted;
         var status = ClassifyPreparationProbe(
             fileSelected || previewDetected,
-            textInserted,
+            insertText ? textInserted : true,
             GetBoolean(probeResult, "quotaDetected"),
             GetBoolean(probeResult, "platformErrorDetected"));
         return new(
@@ -283,11 +324,176 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         }
     }
 
+    public async Task<AdapterIdleProbeResult> ProbeIdleAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (!_session.IsInitialized || !_session.IsOnChatGpt())
+        {
+            return CreateIdleProbeFailure("not-on-chatgpt", WebAdapterStatus.NotReady);
+        }
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var sendButtonSelectorJson = JsonSerializer.Serialize(_rules.SendButtonSelector);
+            var busyButtonSelectorJson = JsonSerializer.Serialize(_rules.BusyButtonSelector);
+            var composerSelectorJson = JsonSerializer.Serialize(_rules.ComposerSelector);
+            var attachmentPreviewSelectorsJson = JsonSerializer.Serialize(
+                _rules.AttachmentPreviewSelectors);
+            var result = await EvaluateAsync(
+                $$"""
+                (() => {
+                  const domainCorrect = location.hostname === 'chatgpt.com' ||
+                    location.hostname.endsWith('.chatgpt.com');
+                  if (!domainCorrect) {
+                    return { code: 'unexpected-origin', domainCorrect: false,
+                      composerCount: 0, stopButtonCount: 0, sendButtonCount: 0,
+                      sendButtonDisabled: false, sendButtonInComposerForm: false,
+                      diagnostics: { pageState: 'Unknown', detectedButtonCount: 0,
+                        candidateButtons: [], failureStage: 'Readiness' } };
+                  }
+
+                  const composers = [...document.querySelectorAll({{composerSelectorJson}})]
+                    .filter(element => !element.hasAttribute('disabled'));
+                  const composer = composers.length === 1 ? composers[0] : null;
+                  const form = composer?.closest('form') ?? null;
+                  const stopButtons = [...document.querySelectorAll({{busyButtonSelectorJson}})];
+                  const sendButtons = form
+                    ? [...form.querySelectorAll({{sendButtonSelectorJson}})]
+                    : [];
+                  const sendDisabled = sendButtons.length === 1 &&
+                    (sendButtons[0].disabled ||
+                      sendButtons[0].getAttribute('aria-disabled') === 'true');
+                  const attachmentSelectors = {{attachmentPreviewSelectorsJson}};
+                  const hasAttachment = Boolean(form) &&
+                    (attachmentSelectors.some(selector => form.querySelector(selector)) ||
+                      Boolean(form.querySelector('img[src^="blob:"]')));
+                  const activeVoiceSelector =
+                    'button[data-testid="end-voice-mode-button"],' +
+                    '[data-testid="voice-mode-composer"]';
+                  const hasVoiceControl = Boolean(document.querySelector(activeVoiceSelector));
+                  const pageState = hasVoiceControl
+                    ? (hasAttachment ? 'VoiceComposerWithAttachment' : 'VoiceComposer')
+                    : (hasAttachment ? 'ComposerWithAttachment' : 'Composer');
+                  const allFormButtons = form ? [...form.querySelectorAll('button')] : [];
+                  const activeVoiceButtons = [...document.querySelectorAll(
+                    'button[data-testid="end-voice-mode-button"],' +
+                    '[data-testid="voice-mode-composer"] button')];
+                  const diagnosticButtons = [...new Set([...allFormButtons, ...activeVoiceButtons])];
+                  const candidateButtons = diagnosticButtons.length > 0
+                    ? diagnosticButtons
+                      .slice(0, {{MaximumDiagnosticButtonCandidates}})
+                      .map(button => ({
+                        tagName: button.tagName.toLowerCase(),
+                        scopeDepth: 0,
+                        type: button.getAttribute('type'),
+                        role: button.getAttribute('role'),
+                        disabled: Boolean(button.disabled),
+                        ariaDisabled: button.getAttribute('aria-disabled') === 'true',
+                        ariaLabel: button.getAttribute('aria-label'),
+                        dataTestId: button.getAttribute('data-testid')
+                      }))
+                    : [];
+                  const failureStage = composers.length !== 1 || !form
+                    ? 'ComposerScope'
+                    : sendButtons.length > 1 || stopButtons.length > 1
+                      ? 'ButtonValidation'
+                      : sendButtons.length !== 1
+                        ? 'ButtonDiscovery'
+                        : 'None';
+                  const code = composers.length !== 1
+                    ? 'composer-count-idle-probe'
+                    : !form
+                      ? 'composer-form-missing-idle-probe'
+                      : stopButtons.length !== 0
+                        ? 'stop-button-present'
+                        : sendButtons.length !== 1
+                          ? 'send-button-count-idle-probe'
+                          : sendDisabled
+                            ? 'send-button-disabled-idle-probe'
+                            : 'ok';
+                  return {
+                    code,
+                    domainCorrect: true,
+                    composerCount: composers.length,
+                    stopButtonCount: stopButtons.length,
+                    sendButtonCount: sendButtons.length,
+                    sendButtonDisabled: sendDisabled,
+                    sendButtonInComposerForm: Boolean(form) && sendButtons.length === 1,
+                    diagnostics: {
+                      pageState,
+                      detectedButtonCount: diagnosticButtons.length,
+                      candidateButtons,
+                      failureStage
+                    }
+                  };
+                })()
+                """);
+
+            var composerCount = GetInt32(result, "composerCount");
+            var stopButtonCount = GetInt32(result, "stopButtonCount");
+            var sendButtonCount = GetInt32(result, "sendButtonCount");
+            var domainCorrect = GetBoolean(result, "domainCorrect");
+            var sendDisabled = GetBoolean(result, "sendButtonDisabled");
+            var sendInForm = GetBoolean(result, "sendButtonInComposerForm");
+            var status = composerCount > 1 || stopButtonCount > 1 || sendButtonCount > 1 ||
+                         GetCode(result) == "composer-form-missing-idle-probe"
+                ? WebAdapterStatus.AdapterInvalid
+                : domainCorrect && composerCount == 1 && stopButtonCount == 0 &&
+                  sendButtonCount == 1 && !sendDisabled && sendInForm
+                    ? WebAdapterStatus.Succeeded
+                    : WebAdapterStatus.NotReady;
+            return new(
+                domainCorrect,
+                composerCount,
+                stopButtonCount,
+                sendButtonCount,
+                sendDisabled,
+                sendInForm,
+                GetCode(result),
+                status,
+                ParseAdapterDiagnostics(result));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or JsonException or IOException or
+                UnauthorizedAccessException or COMException)
+        {
+            return CreateIdleProbeFailure("adapter-operation-failed", WebAdapterStatus.AdapterInvalid);
+        }
+    }
+
+    private static AdapterIdleProbeResult CreateIdleProbeFailure(
+        string code,
+        WebAdapterStatus status) =>
+        new(
+            false,
+            0,
+            0,
+            0,
+            false,
+            false,
+            code,
+            status,
+            new AdapterDiagnostics(
+                AdapterPageState.Unknown,
+                0,
+                [],
+                AdapterFailureStage.Readiness));
+
     public async Task<SubmissionResult> SubmitAsync(CancellationToken cancellationToken = default)
     {
         try
         {
-            return await SubmitCoreAsync(cancellationToken);
+            return await SubmitCoreAsync(
+                SubmitControlPollAttempts,
+                expectedAudioStateVersion: null,
+                requiredSilentDuration: TimeSpan.Zero,
+                expectedPageState: null,
+                cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -311,7 +517,49 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         }
     }
 
-    private async Task<SubmissionResult> SubmitCoreAsync(CancellationToken cancellationToken)
+    public async Task<SubmissionResult> SubmitPreparedInputOnceAsync(
+        long expectedAudioStateVersion,
+        TimeSpan requiredSilentDuration,
+        AdapterPageState expectedPageState,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await SubmitCoreAsync(
+                pollAttempts: 1,
+                expectedAudioStateVersion,
+                requiredSilentDuration,
+                expectedPageState,
+                cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or JsonException or IOException or
+                UnauthorizedAccessException or COMException)
+        {
+            return new(
+                false,
+                false,
+                false,
+                "adapter-operation-failed",
+                WebAdapterStatus.AdapterInvalid,
+                new AdapterDiagnostics(
+                    AdapterPageState.Unknown,
+                    0,
+                    [],
+                    AdapterFailureStage.RuntimeEvaluation));
+        }
+    }
+
+    private async Task<SubmissionResult> SubmitCoreAsync(
+        int pollAttempts,
+        long? expectedAudioStateVersion,
+        TimeSpan requiredSilentDuration,
+        AdapterPageState? expectedPageState,
+        CancellationToken cancellationToken)
     {
         if (!_session.IsInitialized || !_session.IsOnChatGpt())
         {
@@ -334,6 +582,10 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         var quotaSelectorsJson = JsonSerializer.Serialize(_rules.QuotaErrorSelectors);
         var platformErrorSelectorsJson = JsonSerializer.Serialize(_rules.PlatformErrorSelectors);
         var attachmentPreviewSelectorsJson = JsonSerializer.Serialize(_rules.AttachmentPreviewSelectors);
+        var requireAttachmentJson = expectedAudioStateVersion is null ? "false" : "true";
+        var expectedPageStateJson = expectedPageState is null
+            ? "null"
+            : JsonSerializer.Serialize(expectedPageState.Value.ToString());
 
         var adapterDiagnostics = new AdapterDiagnostics(
             AdapterPageState.Unknown,
@@ -342,8 +594,20 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             AdapterFailureStage.Readiness);
         var triggerInvoked = false;
         var submitCode = "send-control-timeout";
-        for (var attempt = 0; attempt < SubmitControlPollAttempts; attempt++)
+        for (var attempt = 0; attempt < pollAttempts; attempt++)
         {
+            if (expectedAudioStateVersion is not null &&
+                !AudioGuardAllowsSubmit(expectedAudioStateVersion.Value, requiredSilentDuration))
+            {
+                return new(
+                    false,
+                    false,
+                    false,
+                    "audio-state-changed-before-submit",
+                    WebAdapterStatus.NotReady,
+                    adapterDiagnostics);
+            }
+
             var controlResult = await EvaluateAsync(
                 $$"""
             (() => {
@@ -438,6 +702,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 sendButtonCount: buttons.length,
                 sendDisabled,
                 busyButtonCount: busyButtons.length,
+                hasAttachment,
                 diagnostics: diagnostics('None')
               };
             })()
@@ -446,6 +711,29 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             adapterDiagnostics = ParseAdapterDiagnostics(controlResult);
             var sendButtonCount = GetInt32(controlResult, "sendButtonCount");
             var busyButtonCount = GetInt32(controlResult, "busyButtonCount");
+            if (!HasExpectedPageState(adapterDiagnostics.PageState, expectedPageState))
+            {
+                return new(
+                    false,
+                    false,
+                    false,
+                    "page-state-changed-before-submit",
+                    WebAdapterStatus.NotReady,
+                    adapterDiagnostics with { FailureStage = AdapterFailureStage.ButtonValidation });
+            }
+
+            if (expectedAudioStateVersion is not null &&
+                !GetBoolean(controlResult, "hasAttachment"))
+            {
+                return new(
+                    false,
+                    false,
+                    false,
+                    "attachment-missing-before-submit",
+                    WebAdapterStatus.AdapterInvalid,
+                    adapterDiagnostics with { FailureStage = AdapterFailureStage.ButtonValidation });
+            }
+
             var decision = DetermineSubmitControlDecision(
                 sendButtonCount,
                 GetBoolean(controlResult, "sendDisabled"),
@@ -477,6 +765,18 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
 
             if (decision == SubmitControlDecision.Invoke)
             {
+                if (expectedAudioStateVersion is not null &&
+                    !AudioGuardAllowsSubmit(expectedAudioStateVersion.Value, requiredSilentDuration))
+                {
+                    return new(
+                        false,
+                        false,
+                        false,
+                        "audio-state-changed-before-invoke",
+                        WebAdapterStatus.NotReady,
+                        adapterDiagnostics with { FailureStage = AdapterFailureStage.ButtonValidation });
+                }
+
                 var invokeResult = await EvaluateAsync(
                     $$"""
                     (() => {
@@ -487,6 +787,22 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                       if (!scope) return { code: 'composer-form-missing-before-invoke', invoked: false };
                       const busyButtons = [...document.querySelectorAll({{busyButtonSelectorJson}})];
                       const buttons = [...scope.querySelectorAll({{sendButtonSelectorJson}})];
+                      const attachmentSelectors = {{attachmentPreviewSelectorsJson}};
+                      const hasAttachment = attachmentSelectors.some(selector => scope.querySelector(selector)) ||
+                        Boolean(scope.querySelector('img[src^="blob:"]'));
+                      const hasVoiceControl = busyButtons.length === 1 || Boolean(scope.querySelector(
+                        'button[data-testid="voice-mode-button"],button[data-testid="end-voice-mode-button"],' +
+                        '[data-testid="voice-mode-composer"]'));
+                      const pageState = hasVoiceControl
+                        ? (hasAttachment ? 'VoiceComposerWithAttachment' : 'VoiceComposer')
+                        : (hasAttachment ? 'ComposerWithAttachment' : 'Composer');
+                      const expectedPageState = {{expectedPageStateJson}};
+                      if (expectedPageState !== null && pageState !== expectedPageState) {
+                        return { code: 'page-state-changed-before-invoke', invoked: false };
+                      }
+                      if ({{requireAttachmentJson}} && !hasAttachment) {
+                        return { code: 'attachment-missing-before-invoke', invoked: false };
+                      }
                       if (busyButtons.length !== 0 || buttons.length !== 1) {
                         return { code: 'send-control-changed-before-invoke', invoked: false };
                       }
@@ -502,26 +818,33 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 submitCode = GetCode(invokeResult);
                 if (!triggerInvoked)
                 {
+                    var invokeStatus = submitCode == "page-state-changed-before-invoke"
+                        ? WebAdapterStatus.NotReady
+                        : WebAdapterStatus.AdapterInvalid;
                     return new(
                         false,
                         false,
                         false,
                         submitCode,
-                        WebAdapterStatus.AdapterInvalid,
+                        invokeStatus,
                         adapterDiagnostics with { FailureStage = AdapterFailureStage.Invocation });
                 }
 
                 break;
             }
 
-            if (attempt == SubmitControlPollAttempts - 1)
+            if (attempt == pollAttempts - 1)
             {
                 return new(
                     false,
                     false,
                     false,
-                    submitCode,
-                    WebAdapterStatus.AdapterInvalid,
+                    expectedAudioStateVersion is null
+                        ? submitCode
+                        : "conversation-busy-before-submit",
+                    expectedAudioStateVersion is null
+                        ? WebAdapterStatus.AdapterInvalid
+                        : WebAdapterStatus.NotReady,
                     adapterDiagnostics with { FailureStage = AdapterFailureStage.ButtonValidation });
             }
 
@@ -578,6 +901,22 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 ? adapterDiagnostics
                 : adapterDiagnostics with { FailureStage = AdapterFailureStage.PostSubmitObservation });
     }
+
+    private bool AudioGuardAllowsSubmit(
+        long expectedAudioStateVersion,
+        TimeSpan requiredSilentDuration)
+    {
+        var snapshot = _session.GetAudioSnapshot(DateTimeOffset.UtcNow);
+        return snapshot.IsKnown &&
+               !snapshot.IsPlaying &&
+               snapshot.Version == expectedAudioStateVersion &&
+               snapshot.SilentDuration >= requiredSilentDuration;
+    }
+
+    public static bool HasExpectedPageState(
+        AdapterPageState currentPageState,
+        AdapterPageState? expectedPageState) =>
+        expectedPageState is null || currentPageState == expectedPageState;
 
     private async Task<JsonElement> EvaluateAsync(string expression)
     {

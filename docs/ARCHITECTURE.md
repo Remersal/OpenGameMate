@@ -16,7 +16,7 @@ OpenGameMate.App
 
 ## Fixed v0.1.0 policies
 
-- Automatic screenshots run every two minutes; the interval is deliberately absent from user settings.
+- The first automatic screenshot attempt occurs after 30 seconds; later attempts run every two minutes. These timings are deliberately absent from user settings.
 - At most one submission is active. Manual submission wins a conflict and the automatic occurrence is skipped.
 - Ordinary failures are not retried immediately. Quota failures enter `VoiceOnly`; adapter failures enter `AdapterError`.
 - Conversation reminders occur after two hours or 60 successful screenshots.
@@ -49,7 +49,7 @@ Capture errors expose stable codes for unsupported systems, missing primary disp
 
 ## Scheduling boundary
 
-`AutomaticSendLoop` emits a fixed occurrence every two minutes and has no user-configurable interval. It never performs an immediate retry. Pause and runtime state are supplied as a predicate, so a non-running occurrence is skipped without changing the underlying periodic cadence; manual submissions therefore do not reset automatic timing.
+`AutomaticSendLoop` emits its first occurrence after 30 seconds and waits a fresh two minutes after each later occurrence completes or is skipped; neither timing is user-configurable. It never performs an immediate retry or retains a missed timer tick for catch-up. Pause and runtime state are supplied as a predicate, and manual submissions do not reset the active delay.
 
 `SubmissionCoordinator` allows one active submission and has no queue. An automatic occurrence yields once before starting so a simultaneous manual request can reserve priority; a running manual submission likewise causes the automatic occurrence to be skipped. An operation that already started is not preempted. `ConversationReminderTracker` raises one reminder after two elapsed hours or 60 successful image submissions, whichever occurs first, and resets only when the user starts a new conversation.
 
@@ -65,6 +65,6 @@ The repository currently has no declared official GitHub remote or maintainer-ow
 
 The App project is the composition root. Startup displays only the main window and restores settings, never capture or runtime state. User actions create the independent ChatGPT window, confirm Voice, optionally send role text, acknowledge full-display privacy risk, and start the scheduler. WebView2 work is dispatched on the WPF thread; fixed timing remains in Core.
 
-Submission composition is capture → prepare image/text → verify attachment/text → invoke one send control → verify composer/attachment state → delete the local PNG. `QuotaReached` cancels automatic work and enters `VoiceOnly`; `AdapterInvalid` cancels work and enters `AdapterError`; ordinary failures return to `Running` without an immediate retry. No branch reads a model reply.
+Submission composition is capture → prepare image/text → verify attachment/text → invoke one send control → verify composer/attachment state → delete the local PNG. Automatic capture begins only after at least three seconds of audio silence and six seconds of unchanged safe page/audio state. A Voice state change during preparation abandons that occurrence as an ordinary failure without clicking send; it is not an adapter mismatch. `QuotaReached` cancels automatic work and enters `VoiceOnly`; `AdapterInvalid` cancels work and enters `AdapterError`; ordinary failures return to `Running` without an immediate retry. No branch reads a model reply.
 
 The tray mirrors show/hide browser, send-now, pause/resume, stop, and exit. Closing the browser during a run consumes at most one background recovery and requires explicit Voice confirmation before resuming. Diagnostics export belongs to the Diagnostics module and packages only allowlisted JSONL filenames after a user-selected destination.

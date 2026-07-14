@@ -2,6 +2,8 @@ namespace OpenGameMate.Core;
 
 public static class RuntimePolicy
 {
+    public static readonly TimeSpan InitialAutomaticCaptureDelay = TimeSpan.FromSeconds(30);
+
     public static readonly TimeSpan AutomaticCaptureInterval = TimeSpan.FromMinutes(2);
 
     public static readonly TimeSpan ConversationReminderAfter = TimeSpan.FromHours(2);

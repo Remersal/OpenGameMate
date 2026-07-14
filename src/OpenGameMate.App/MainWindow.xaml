@@ -85,7 +85,7 @@
                 <GroupBox x:Name="RunGroup" Header="3. 陪玩控制" Margin="0,0,0,12">
                     <StackPanel Margin="12">
                         <TextBlock x:Name="RunInstructionText" TextWrapping="Wrap"
-                                   Text="开始后每 2 分钟自动发送一次主显示器截图。手动发送不重置计时，普通失败不立即重试。" />
+                                   Text="开始 30 秒后首次自动发送，之后每 2 分钟一次。手动发送不重置计时，普通失败不立即重试。" />
                         <WrapPanel Margin="0,8,0,0">
                             <Button x:Name="StartButton" Padding="16,8" Margin="0,0,8,8"
                                     Click="StartButton_Click" Content="开始陪玩" />

@@ -190,6 +190,20 @@ public class Phase0UnitTests
     }
 
     [Fact]
+    public void PreparedSubmit_RequiresThePageStateObservedByTheFinalReadinessProbe()
+    {
+        Assert.True(OpenGameMate.Adapters.ChatGptWebAdapter.HasExpectedPageState(
+            OpenGameMate.Core.AdapterPageState.ComposerWithAttachment,
+            OpenGameMate.Core.AdapterPageState.ComposerWithAttachment));
+        Assert.False(OpenGameMate.Adapters.ChatGptWebAdapter.HasExpectedPageState(
+            OpenGameMate.Core.AdapterPageState.VoiceComposerWithAttachment,
+            OpenGameMate.Core.AdapterPageState.ComposerWithAttachment));
+        Assert.True(OpenGameMate.Adapters.ChatGptWebAdapter.HasExpectedPageState(
+            OpenGameMate.Core.AdapterPageState.Composer,
+            expectedPageState: null));
+    }
+
+    [Fact]
     public void AdapterDiagnosticsParser_ReadsOnlyBoundedControlMetadata()
     {
         using var document = System.Text.Json.JsonDocument.Parse(
@@ -305,4 +319,64 @@ public class Phase0UnitTests
 
         Assert.Null(OpenGameMate.Browser.ChatGptBrowserSession.FindFixedRuntimeFolder(missingRoot));
     }
+
+    [Fact]
+    public void AdapterIdleProbe_RequiresOneEnabledSendButtonInsideComposerForm()
+    {
+        var diagnostics = new OpenGameMate.Core.AdapterDiagnostics(
+            OpenGameMate.Core.AdapterPageState.Composer,
+            1,
+            [],
+            OpenGameMate.Core.AdapterFailureStage.None);
+        var idle = new OpenGameMate.Core.AdapterIdleProbeResult(
+            true,
+            1,
+            0,
+            1,
+            false,
+            true,
+            "ok",
+            OpenGameMate.Core.WebAdapterStatus.Succeeded,
+            diagnostics);
+
+        Assert.True(idle.IsIdle);
+        Assert.True(idle.IsSafeToPrepare);
+        Assert.True((idle with
+        {
+            SendButtonCount = 0,
+            SendButtonDisabled = false,
+            SendButtonInComposerForm = false,
+            Status = OpenGameMate.Core.WebAdapterStatus.NotReady,
+        }).IsSafeToPrepare);
+        Assert.True((idle with
+        {
+            SendButtonDisabled = true,
+            Status = OpenGameMate.Core.WebAdapterStatus.NotReady,
+        }).IsSafeToPrepare);
+        Assert.False((idle with { SendButtonDisabled = true }).IsIdle);
+        Assert.False((idle with { SendButtonInComposerForm = false }).IsIdle);
+        Assert.False((idle with { StopButtonCount = 1 }).IsIdle);
+        Assert.False((idle with { ComposerCount = 2 }).IsIdle);
+        Assert.False((idle with { StopButtonCount = 1 }).IsSafeToPrepare);
+        Assert.False((idle with { SendButtonCount = 2 }).IsSafeToPrepare);
+        Assert.False((idle with
+        {
+            Diagnostics = diagnostics with
+            {
+                PageState = OpenGameMate.Core.AdapterPageState.VoiceComposer,
+            },
+        }).IsSafeToPrepare);
+        Assert.False((idle with
+        {
+            Diagnostics = diagnostics with
+            {
+                PageState = OpenGameMate.Core.AdapterPageState.ComposerWithAttachment,
+            },
+        }).IsSafeToPrepare);
+        Assert.False((idle with
+        {
+            Status = OpenGameMate.Core.WebAdapterStatus.AdapterInvalid,
+        }).IsSafeToPrepare);
+    }
+
 }

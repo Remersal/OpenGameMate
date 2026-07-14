@@ -49,6 +49,7 @@ public sealed class StateMachineTests
     [Fact]
     public void RuntimePolicy_IsFixedForVersionZeroPointOne()
     {
+        Assert.Equal(TimeSpan.FromSeconds(30), RuntimePolicy.InitialAutomaticCaptureDelay);
         Assert.Equal(TimeSpan.FromMinutes(2), RuntimePolicy.AutomaticCaptureInterval);
         Assert.Equal(TimeSpan.FromHours(2), RuntimePolicy.ConversationReminderAfter);
         Assert.Equal(60, RuntimePolicy.ConversationReminderAfterSuccessfulImages);

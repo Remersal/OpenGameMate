@@ -21,7 +21,21 @@ public sealed record DiagnosticEvent(
     int? ImageHeight = null,
     long? FileSizeBytes = null,
     string? ExceptionType = null,
-    AdapterDiagnostics? AdapterDiagnostics = null)
+    AdapterDiagnostics? AdapterDiagnostics = null,
+    DateTimeOffset? ScheduledAt = null,
+    DateTimeOffset? PendingCreatedAt = null,
+    DateTimeOffset? DeferredAt = null,
+    string? DeferredReason = null,
+    DateTimeOffset? IdleCandidateAt = null,
+    long? IdleStableDurationMs = null,
+    WebAudioState? AudioState = null,
+    long? AudioSilentDurationMs = null,
+    DateTimeOffset? AttachStartedAt = null,
+    DateTimeOffset? TextSetAt = null,
+    DateTimeOffset? SubmitStartedAt = null,
+    bool? VoiceStateChangedAfterAttach = null,
+    bool? SkippedBecauseConversationBusy = null,
+    DateTimeOffset? PendingExpiredAt = null)
 {
     private const int MaximumAdapterButtonCandidates = 12;
 
@@ -30,6 +44,7 @@ public sealed record DiagnosticEvent(
         ValidateToken(EventName, nameof(EventName), 80);
         ValidateOptionalToken(ErrorCode, nameof(ErrorCode), 80);
         ValidateOptionalToken(ExceptionType, nameof(ExceptionType), 160);
+        ValidateOptionalToken(DeferredReason, nameof(DeferredReason), 80);
 
         if ((ImageWidth.HasValue || ImageHeight.HasValue) &&
             (!ImageWidth.HasValue || !ImageHeight.HasValue || ImageWidth <= 0 || ImageHeight <= 0))
@@ -44,6 +59,16 @@ public sealed record DiagnosticEvent(
         }
 
         ValidateAdapterDiagnostics(AdapterDiagnostics);
+        ValidateNonNegativeDuration(IdleStableDurationMs, nameof(IdleStableDurationMs));
+        ValidateNonNegativeDuration(AudioSilentDurationMs, nameof(AudioSilentDurationMs));
+    }
+
+    private static void ValidateNonNegativeDuration(long? value, string name)
+    {
+        if (value < 0)
+        {
+            throw new DiagnosticEventValidationException($"{name} cannot be negative.");
+        }
     }
 
     private static void ValidateAdapterDiagnostics(AdapterDiagnostics? diagnostics)

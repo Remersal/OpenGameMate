@@ -19,6 +19,15 @@ namespace OpenGameMate.App;
 
 public partial class MainWindow : Window
 {
+    private static readonly TimeSpan PendingProbeInterval = TimeSpan.FromMilliseconds(250);
+
+    private enum PendingGateResult
+    {
+        Ready,
+        Skipped,
+        AdapterInvalid,
+    }
+
     private readonly AppDataPaths _paths;
     private readonly IAppSettingsStore _settingsStore;
     private readonly IDiagnosticLogger _logger;
@@ -26,6 +35,7 @@ public partial class MainWindow : Window
     private readonly GameMateStateMachine _stateMachine = new();
     private readonly BrowserRestartGate _browserRestartGate = new();
     private readonly AutomaticSendLoop _automaticSendLoop = new();
+    private readonly AutomaticPendingSendSlot _automaticPendingSendSlot = new();
     private readonly SubmissionCoordinator _submissionCoordinator;
 
     private OpenGameMateSettings _settings = new();
@@ -36,6 +46,9 @@ public partial class MainWindow : Window
     private TrayIconController? _trayIcon;
     private CancellationTokenSource? _runCancellation;
     private Task? _automaticLoopTask;
+    private long? _automaticReadyAudioVersion;
+    private AdapterPageState? _automaticReadyPageState;
+    private AutomaticPendingSend? _dispatchingAutomaticPending;
     private bool _loaded;
     private bool _isExiting;
     private bool _expectedBrowserClose;
@@ -177,8 +190,8 @@ public partial class MainWindow : Window
             : T("尚未记录角色初始化。", "Role initialization has not been recorded.");
         RunGroup.Header = T("3. 陪玩控制", "3. Companion controls");
         RunInstructionText.Text = T(
-            "开始后每 2 分钟自动发送一次主显示器截图。手动发送不重置计时，普通失败不立即重试。",
-            "After starting, the primary display is sent every two minutes. Manual sends do not reset timing; ordinary failures are not retried immediately.");
+            "开始 30 秒后首次自动发送，之后每 2 分钟一次。手动发送不重置计时，普通失败不立即重试。",
+            "The first automatic send occurs after 30 seconds, then every two minutes. Manual sends do not reset timing; ordinary failures are not retried immediately.");
         StartButton.Content = T("开始陪玩", "Start");
         SendNowButton.Content = T("立即发送", "Send now");
         StopButton.Content = T("停止", "Stop");
@@ -228,6 +241,7 @@ public partial class MainWindow : Window
                 FindBrowserRuntime());
             _browserSession.StatusChanged += BrowserSession_StatusChanged;
             _browserSession.ProcessFailed += BrowserSession_ProcessFailed;
+            _browserSession.AudioStateChanged += BrowserSession_AudioStateChanged;
             await _browserSession.InitializeAsync();
             _adapter = new ChatGptWebAdapter(_browserSession, ChatGptAdapterRules.BuiltIn);
 
@@ -240,6 +254,13 @@ public partial class MainWindow : Window
                 ? T("ChatGPT 已自动重开一次；请重新开启 Voice 并确认。", "ChatGPT was reopened once. Restart Voice and confirm.")
                 : T("ChatGPT 已打开；登录和 Voice 由你控制。", "ChatGPT opened; sign-in and Voice remain under your control."));
             await SafeLogAsync("browser.initialized", DiagnosticLevel.Information, success: true);
+            await SafeLogAsync(
+                "webview.audio-state",
+                DiagnosticLevel.Information,
+                audioState: _browserSession.IsDocumentPlayingAudio
+                    ? WebAudioState.Playing
+                    : WebAudioState.Silent,
+                audioSilentDurationMs: _browserSession.IsDocumentPlayingAudio ? 0 : 0);
         }
         catch (Exception exception)
         {
@@ -299,6 +320,17 @@ public partial class MainWindow : Window
             success: false);
     }
 
+    private async void BrowserSession_AudioStateChanged(
+        object? sender,
+        BrowserAudioStateChangedEventArgs args)
+    {
+        await SafeLogAsync(
+            "webview.audio-state-changed",
+            DiagnosticLevel.Information,
+            audioState: args.IsPlaying ? WebAudioState.Playing : WebAudioState.Silent,
+            audioSilentDurationMs: args.IsPlaying ? 0 : 0);
+    }
+
     private void BrowserWindow_Closing(object? sender, CancelEventArgs e) => _browserSession?.Dispose();
 
     private void BrowserWindow_Closed(object? sender, EventArgs e)
@@ -316,6 +348,7 @@ public partial class MainWindow : Window
         {
             _browserSession.StatusChanged -= BrowserSession_StatusChanged;
             _browserSession.ProcessFailed -= BrowserSession_ProcessFailed;
+            _browserSession.AudioStateChanged -= BrowserSession_AudioStateChanged;
             _browserSession.Dispose();
         }
 
@@ -498,8 +531,8 @@ public partial class MainWindow : Window
         var result = MessageBox.Show(
             this,
             T(
-                "OpenGameMate 将每 2 分钟捕获整个主显示器并发送到当前 ChatGPT 对话。画面可能包含通知、聊天、账号名或其他私人内容。请先关闭敏感窗口。独占全屏、受保护内容和反作弊环境可能黑屏或失败，程序不会绕过保护。\n\n是否理解风险并开始？",
-                "OpenGameMate will capture the entire primary display every two minutes and send it to the current ChatGPT chat. Notifications, chats, account names, or other private content may be included. Close sensitive windows first. Exclusive fullscreen, protected content, and anti-cheat environments may fail or produce black frames; protections are not bypassed.\n\nDo you understand the risk and want to start?"),
+                "OpenGameMate 将在开始 30 秒后首次捕获整个主显示器，之后每 2 分钟捕获并发送到当前 ChatGPT 对话。画面可能包含通知、聊天、账号名或其他私人内容。请先关闭敏感窗口。独占全屏、受保护内容和反作弊环境可能黑屏或失败，程序不会绕过保护。\n\n是否理解风险并开始？",
+                "OpenGameMate will first capture the entire primary display 30 seconds after starting, then capture and send it every two minutes to the current ChatGPT chat. Notifications, chats, account names, or other private content may be included. Close sensitive windows first. Exclusive fullscreen, protected content, and anti-cheat environments may fail or produce black frames; protections are not bypassed.\n\nDo you understand the risk and want to start?"),
             T("整屏捕获隐私确认", "Full-display capture privacy confirmation"),
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
@@ -538,7 +571,9 @@ public partial class MainWindow : Window
         _runCancellation?.Dispose();
         _runCancellation = new CancellationTokenSource();
         _automaticLoopTask = RunAutomaticLoopAsync(_runCancellation.Token);
-        AddActivity(T("陪玩已开始；第一次自动发送将在 2 分钟后。", "Companion mode started; the first automatic send is in two minutes."));
+        AddActivity(T(
+            "陪玩已开始；第一次自动发送将在 30 秒后，之后每 2 分钟一次。",
+            "Companion mode started; the first automatic send is in 30 seconds, then every two minutes."));
         _ = SafeLogAsync("run.started", DiagnosticLevel.Information, success: true);
         UpdateUi();
     }
@@ -549,17 +584,7 @@ public partial class MainWindow : Window
         {
             await _automaticSendLoop.RunAsync(
                 () => _stateMachine.State == GameMateState.Running,
-                async token =>
-                {
-                    var result = await _submissionCoordinator.RunAutomaticAsync(token);
-                    if (result.Status != SubmissionDispatchStatus.Executed)
-                    {
-                        await SafeLogAsync(
-                            "submission.automatic-skipped",
-                            DiagnosticLevel.Information,
-                            errorCode: result.Status.ToString());
-                    }
-                },
+                ProcessAutomaticOccurrenceAsync,
                 cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -570,6 +595,203 @@ public partial class MainWindow : Window
             await ReportExceptionAsync("scheduler.failed", "scheduler", exception);
         }
     }
+
+    private async Task ProcessAutomaticOccurrenceAsync(
+        DateTimeOffset scheduledAt,
+        CancellationToken cancellationToken)
+    {
+        var createdAt = DateTimeOffset.UtcNow;
+        if (!_automaticPendingSendSlot.TryCreate(scheduledAt, createdAt, out var pending) ||
+            pending is null)
+        {
+            await SafeLogAsync(
+                "pending.capacity-skipped",
+                DiagnosticLevel.Information,
+                errorCode: "pending-capacity-one",
+                scheduledAt: scheduledAt,
+                pendingCreatedAt: createdAt);
+            return;
+        }
+
+        await SafeLogAsync(
+            "pending.created",
+            DiagnosticLevel.Information,
+            success: true,
+            scheduledAt: pending.ScheduledAt,
+            pendingCreatedAt: pending.PendingCreatedAt);
+        try
+        {
+            var gate = await WaitForPendingIdleAsync(pending, cancellationToken);
+            if (gate == PendingGateResult.AdapterInvalid)
+            {
+                ApplyTrigger(GameMateTrigger.AdapterInvalid);
+                _runCancellation?.Cancel();
+                AddActivity(T(
+                    "网页适配失效；待发送截图已放弃，且不会随机点击。",
+                    "The webpage adapter failed; the pending screenshot was abandoned without random clicks."));
+                UpdateUi();
+                return;
+            }
+
+            if (gate != PendingGateResult.Ready)
+            {
+                return;
+            }
+
+            _dispatchingAutomaticPending = pending;
+            var result = await _submissionCoordinator.RunAutomaticAsync(cancellationToken);
+            if (result.Status != SubmissionDispatchStatus.Executed)
+            {
+                await SafeLogAsync(
+                    "submission.automatic-skipped",
+                    DiagnosticLevel.Information,
+                    errorCode: result.Status.ToString(),
+                    scheduledAt: pending.ScheduledAt,
+                    pendingCreatedAt: pending.PendingCreatedAt);
+            }
+        }
+        finally
+        {
+            _dispatchingAutomaticPending = null;
+            _automaticReadyAudioVersion = null;
+            _automaticReadyPageState = null;
+            _automaticPendingSendSlot.Release(pending);
+        }
+    }
+
+    private async Task<PendingGateResult> WaitForPendingIdleAsync(
+        AutomaticPendingSend pending,
+        CancellationToken cancellationToken)
+    {
+        string? lastDeferredReason = null;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_stateMachine.State != GameMateState.Running)
+            {
+                await SafeLogAsync(
+                    "pending.skipped-state-change",
+                    DiagnosticLevel.Information,
+                    errorCode: "manual-priority-or-run-stopped",
+                    scheduledAt: pending.ScheduledAt,
+                    pendingCreatedAt: pending.PendingCreatedAt);
+                return PendingGateResult.Skipped;
+            }
+
+            if (_browserSession is null || _adapter is null)
+            {
+                return PendingGateResult.AdapterInvalid;
+            }
+
+            var observedAt = DateTimeOffset.UtcNow;
+            var audio = _browserSession.GetAudioSnapshot(observedAt);
+            var probe = await _adapter.ProbeIdleAsync(cancellationToken);
+            if (probe.Status == WebAdapterStatus.AdapterInvalid)
+            {
+                await SafeLogAsync(
+                    "pending.adapter-invalid",
+                    DiagnosticLevel.Warning,
+                    errorCode: probe.Code,
+                    adapterDiagnostics: probe.Diagnostics,
+                    scheduledAt: pending.ScheduledAt,
+                    pendingCreatedAt: pending.PendingCreatedAt,
+                    audioState: ToWebAudioState(audio),
+                    audioSilentDurationMs: (long)audio.SilentDuration.TotalMilliseconds);
+                return PendingGateResult.AdapterInvalid;
+            }
+
+            var audioSilent = audio.IsKnown && !audio.IsPlaying;
+            var deferredReason = !audio.IsKnown
+                ? "audio-unknown"
+                : audio.IsPlaying
+                    ? "audio-playing"
+                    : !probe.IsSafeToPrepare
+                        ? GetUnsafePreparationReason(probe)
+                        : "idle-stabilizing";
+            var previousCandidate = pending.IdleCandidateAt;
+            var observation = pending.Observe(
+                observedAt,
+                probe.IsSafeToPrepare,
+                audioSilent,
+                audio.SilentDuration,
+                deferredReason);
+            if (observation == PendingSendObservation.Expired)
+            {
+                await SafeLogAsync(
+                    "pending.expired",
+                    DiagnosticLevel.Information,
+                    errorCode: "conversation-busy-timeout",
+                    scheduledAt: pending.ScheduledAt,
+                    pendingCreatedAt: pending.PendingCreatedAt,
+                    deferredAt: pending.DeferredAt,
+                    deferredReason: pending.DeferredReason,
+                    idleCandidateAt: pending.IdleCandidateAt,
+                    idleStableDurationMs: pending.IdleStableDurationMs,
+                    audioState: ToWebAudioState(audio),
+                    audioSilentDurationMs: (long)audio.SilentDuration.TotalMilliseconds,
+                    skippedBecauseConversationBusy: true,
+                    pendingExpiredAt: pending.PendingExpiredAt);
+                return PendingGateResult.Skipped;
+            }
+
+            if (previousCandidate is null && pending.IdleCandidateAt is not null)
+            {
+                await SafeLogAsync(
+                    "pending.idle-candidate",
+                    DiagnosticLevel.Information,
+                    scheduledAt: pending.ScheduledAt,
+                    pendingCreatedAt: pending.PendingCreatedAt,
+                    adapterDiagnostics: probe.Diagnostics,
+                    idleCandidateAt: pending.IdleCandidateAt,
+                    idleStableDurationMs: pending.IdleStableDurationMs,
+                    audioState: ToWebAudioState(audio),
+                    audioSilentDurationMs: (long)audio.SilentDuration.TotalMilliseconds);
+            }
+
+            if (observation == PendingSendObservation.Ready)
+            {
+                _automaticReadyAudioVersion = audio.Version;
+                _automaticReadyPageState = probe.Diagnostics.PageState;
+                await SafeLogAsync(
+                    "pending.ready",
+                    DiagnosticLevel.Information,
+                    success: true,
+                    adapterDiagnostics: probe.Diagnostics,
+                    scheduledAt: pending.ScheduledAt,
+                    pendingCreatedAt: pending.PendingCreatedAt,
+                    idleCandidateAt: pending.IdleCandidateAt,
+                    idleStableDurationMs: pending.IdleStableDurationMs,
+                    audioState: ToWebAudioState(audio),
+                    audioSilentDurationMs: (long)audio.SilentDuration.TotalMilliseconds);
+                return PendingGateResult.Ready;
+            }
+
+            if (pending.DeferredReason is not null &&
+                !string.Equals(lastDeferredReason, pending.DeferredReason, StringComparison.Ordinal))
+            {
+                lastDeferredReason = pending.DeferredReason;
+                await SafeLogAsync(
+                    "pending.deferred",
+                    DiagnosticLevel.Information,
+                    scheduledAt: pending.ScheduledAt,
+                    pendingCreatedAt: pending.PendingCreatedAt,
+                    adapterDiagnostics: probe.Diagnostics,
+                    deferredAt: pending.DeferredAt,
+                    deferredReason: pending.DeferredReason,
+                    audioState: ToWebAudioState(audio),
+                    audioSilentDurationMs: (long)audio.SilentDuration.TotalMilliseconds);
+            }
+
+            await Task.Delay(PendingProbeInterval, cancellationToken);
+        }
+    }
+
+    private static WebAudioState ToWebAudioState(BrowserAudioSnapshot audio) =>
+        !audio.IsKnown
+            ? WebAudioState.Unknown
+            : audio.IsPlaying
+                ? WebAudioState.Playing
+                : WebAudioState.Silent;
 
     private async void SendNowButton_Click(object sender, RoutedEventArgs e) => await SendNowAsync();
 
@@ -657,6 +879,11 @@ public partial class MainWindow : Window
         SubmissionOrigin origin,
         CancellationToken cancellationToken)
     {
+        if (origin == SubmissionOrigin.Automatic)
+        {
+            return await PerformAutomaticSubmissionAsync(cancellationToken);
+        }
+
         var capture = await _capture.CaptureAsync(cancellationToken);
         await SafeLogAsync(
             "capture.succeeded",
@@ -692,6 +919,264 @@ public partial class MainWindow : Window
             : T("自动画面已发送。", "Automatic screen sent."));
         return SubmissionOutcome.Succeeded;
     }
+
+    private async Task<SubmissionOutcome> PerformAutomaticSubmissionAsync(
+        CancellationToken cancellationToken)
+    {
+        var pending = _dispatchingAutomaticPending;
+        var expectedAudioVersion = _automaticReadyAudioVersion;
+        var expectedPageState = _automaticReadyPageState;
+        if (pending is null || expectedAudioVersion is null || expectedPageState is null ||
+            !await AutomaticGuardIsValidAsync(
+                expectedAudioVersion.Value,
+                expectedPageState.Value,
+                cancellationToken))
+        {
+            await SafeLogAsync(
+                "submission.pre-capture-guard-failed",
+                DiagnosticLevel.Information,
+                errorCode: "idle-state-changed",
+                scheduledAt: pending?.ScheduledAt,
+                pendingCreatedAt: pending?.PendingCreatedAt);
+            return SubmissionOutcome.OrdinaryFailure;
+        }
+
+        var capture = await _capture.CaptureAsync(cancellationToken);
+        await SafeLogAsync(
+            "capture.succeeded",
+            DiagnosticLevel.Information,
+            success: true,
+            imageWidth: capture.OutputWidth,
+            imageHeight: capture.OutputHeight,
+            fileSizeBytes: capture.FileBytes,
+            scheduledAt: pending.ScheduledAt,
+            pendingCreatedAt: pending.PendingCreatedAt);
+
+        if (!await AutomaticGuardIsValidAsync(
+                expectedAudioVersion.Value,
+                expectedPageState.Value,
+                cancellationToken))
+        {
+            await SafeLogAsync(
+                "submission.post-capture-guard-failed",
+                DiagnosticLevel.Information,
+                errorCode: "idle-state-changed",
+                scheduledAt: pending.ScheduledAt,
+                pendingCreatedAt: pending.PendingCreatedAt);
+            return SubmissionOutcome.OrdinaryFailure;
+        }
+
+        var attachStartedAt = DateTimeOffset.UtcNow;
+        await SafeLogAsync(
+            "submission.attach-started",
+            DiagnosticLevel.Information,
+            scheduledAt: pending.ScheduledAt,
+            pendingCreatedAt: pending.PendingCreatedAt,
+            attachStartedAt: attachStartedAt);
+        var attachment = await _adapter!.PrepareImageAsync(capture.Path, cancellationToken);
+        if (attachment.Status != WebAdapterStatus.Succeeded || !attachment.ImageAdded)
+        {
+            return MapAdapterStatus(attachment.Status);
+        }
+
+        var afterAttachAudio = _browserSession!.GetAudioSnapshot(DateTimeOffset.UtcNow);
+        var voiceStateChangedAfterAttach =
+            afterAttachAudio.Version != expectedAudioVersion.Value || afterAttachAudio.IsPlaying;
+        await SafeLogAsync(
+            "submission.attachment-prepared",
+            voiceStateChangedAfterAttach ? DiagnosticLevel.Warning : DiagnosticLevel.Information,
+            errorCode: voiceStateChangedAfterAttach ? "voice-state-changed-after-attach" : null,
+            success: !voiceStateChangedAfterAttach,
+            scheduledAt: pending.ScheduledAt,
+            pendingCreatedAt: pending.PendingCreatedAt,
+            attachStartedAt: attachStartedAt,
+            voiceStateChangedAfterAttach: voiceStateChangedAfterAttach,
+            audioState: ToWebAudioState(afterAttachAudio),
+            audioSilentDurationMs: (long)afterAttachAudio.SilentDuration.TotalMilliseconds);
+        if (voiceStateChangedAfterAttach)
+        {
+            return SubmissionOutcome.OrdinaryFailure;
+        }
+
+        var message = CompanionPrompts.AutomaticScreenshot(PromptLanguage);
+        var text = await _adapter.PrepareTextAsync(message, cancellationToken);
+        var textSetAt = DateTimeOffset.UtcNow;
+        if (text.Status != WebAdapterStatus.Succeeded || !text.TextInserted)
+        {
+            return MapAdapterStatus(text.Status);
+        }
+
+        var expectedPreparedPageState = expectedPageState.Value switch
+        {
+            AdapterPageState.Composer => AdapterPageState.ComposerWithAttachment,
+            _ => AdapterPageState.Unknown,
+        };
+        if (expectedPreparedPageState == AdapterPageState.Unknown)
+        {
+            return SubmissionOutcome.OrdinaryFailure;
+        }
+
+        var preparedGate = await WaitForPreparedInputReadyAsync(
+            pending,
+            expectedAudioVersion.Value,
+            expectedPreparedPageState,
+            cancellationToken);
+        await SafeLogAsync(
+            "submission.pre-submit-check",
+            preparedGate.Ready ? DiagnosticLevel.Information : DiagnosticLevel.Warning,
+            errorCode: preparedGate.Ready
+                ? null
+                : preparedGate.VoiceStateChanged
+                    ? "voice-state-changed-after-attach"
+                    : preparedGate.Expired
+                        ? "conversation-busy-timeout"
+                        : preparedGate.Probe?.Code ?? "prepared-input-not-ready",
+            success: preparedGate.Ready,
+            adapterDiagnostics: preparedGate.Probe?.Diagnostics,
+            scheduledAt: pending.ScheduledAt,
+            pendingCreatedAt: pending.PendingCreatedAt,
+            attachStartedAt: attachStartedAt,
+            textSetAt: textSetAt,
+            voiceStateChangedAfterAttach: preparedGate.VoiceStateChanged,
+            skippedBecauseConversationBusy: preparedGate.Expired ? true : null,
+            pendingExpiredAt: preparedGate.Expired ? DateTimeOffset.UtcNow : null);
+        if (!preparedGate.Ready)
+        {
+            return preparedGate.Probe?.Status == WebAdapterStatus.AdapterInvalid
+                ? SubmissionOutcome.AdapterInvalid
+                : SubmissionOutcome.OrdinaryFailure;
+        }
+
+        var submitStartedAt = DateTimeOffset.UtcNow;
+        var submission = await _adapter.SubmitPreparedInputOnceAsync(
+            expectedAudioVersion.Value,
+            AutomaticPendingSend.RequiredIdleStability,
+            expectedPreparedPageState,
+            cancellationToken);
+        await SafeLogAsync(
+            "adapter.submit-probe",
+            submission.Status == WebAdapterStatus.Succeeded
+                ? DiagnosticLevel.Information
+                : DiagnosticLevel.Warning,
+            errorCode: submission.Code,
+            success: submission.Status == WebAdapterStatus.Succeeded,
+            adapterDiagnostics: submission.Diagnostics,
+            scheduledAt: pending.ScheduledAt,
+            pendingCreatedAt: pending.PendingCreatedAt,
+            attachStartedAt: attachStartedAt,
+            textSetAt: textSetAt,
+            submitStartedAt: submitStartedAt,
+            voiceStateChangedAfterAttach: false);
+        if (submission.Status != WebAdapterStatus.Succeeded ||
+            !submission.TriggerInvoked ||
+            !(submission.ComposerCleared || submission.AttachmentCleared))
+        {
+            return MapAdapterStatus(submission.Status);
+        }
+
+        await SafeLogAsync(
+            "submission.succeeded",
+            DiagnosticLevel.Information,
+            success: true,
+            scheduledAt: pending.ScheduledAt,
+            pendingCreatedAt: pending.PendingCreatedAt,
+            attachStartedAt: attachStartedAt,
+            textSetAt: textSetAt,
+            submitStartedAt: submitStartedAt,
+            voiceStateChangedAfterAttach: false);
+        AddActivity(T("自动画面已发送。", "Automatic screen sent."));
+        return SubmissionOutcome.Succeeded;
+    }
+
+    private async Task<bool> AutomaticGuardIsValidAsync(
+        long expectedAudioVersion,
+        AdapterPageState expectedPageState,
+        CancellationToken cancellationToken)
+    {
+        if (_browserSession is null || _adapter is null)
+        {
+            return false;
+        }
+
+        var audio = _browserSession.GetAudioSnapshot(DateTimeOffset.UtcNow);
+        if (!audio.IsKnown || audio.IsPlaying || audio.Version != expectedAudioVersion ||
+            audio.SilentDuration < AutomaticPendingSend.RequiredIdleStability)
+        {
+            return false;
+        }
+
+        var probe = await _adapter.ProbeIdleAsync(cancellationToken);
+        return probe.IsSafeToPrepare && probe.Diagnostics.PageState == expectedPageState;
+    }
+
+    private static string GetUnsafePreparationReason(AdapterIdleProbeResult probe)
+    {
+        if (probe.Diagnostics.PageState is
+            AdapterPageState.ComposerWithAttachment or
+            AdapterPageState.VoiceComposerWithAttachment)
+        {
+            return "composer-not-empty";
+        }
+
+        return string.Equals(probe.Code, "ok", StringComparison.Ordinal)
+            ? "page-not-ready"
+            : probe.Code;
+    }
+
+    private async Task<PreparedInputGateResult> WaitForPreparedInputReadyAsync(
+        AutomaticPendingSend pending,
+        long expectedAudioVersion,
+        AdapterPageState expectedPageState,
+        CancellationToken cancellationToken)
+    {
+        AdapterIdleProbeResult? lastProbe = null;
+        while (DateTimeOffset.UtcNow < pending.ExpiresAt)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_browserSession is null || _adapter is null)
+            {
+                return new(false, false, false, lastProbe);
+            }
+
+            var audio = _browserSession.GetAudioSnapshot(DateTimeOffset.UtcNow);
+            if (!audio.IsKnown || audio.IsPlaying || audio.Version != expectedAudioVersion ||
+                audio.SilentDuration < AutomaticPendingSend.RequiredIdleStability)
+            {
+                return new(false, true, false, lastProbe);
+            }
+
+            lastProbe = await _adapter.ProbeIdleAsync(cancellationToken);
+            if (lastProbe.Status == WebAdapterStatus.AdapterInvalid)
+            {
+                return new(false, false, false, lastProbe);
+            }
+
+            if (lastProbe.Diagnostics.PageState != expectedPageState)
+            {
+                return new(false, true, false, lastProbe);
+            }
+
+            if (lastProbe.IsIdle)
+            {
+                var attachmentPresent = lastProbe.Diagnostics.PageState is
+                    AdapterPageState.ComposerWithAttachment or
+                    AdapterPageState.VoiceComposerWithAttachment;
+                return attachmentPresent
+                    ? new(true, false, false, lastProbe)
+                    : new(false, false, false, lastProbe);
+            }
+
+            await Task.Delay(PendingProbeInterval, cancellationToken);
+        }
+
+        return new(false, false, true, lastProbe);
+    }
+
+    private sealed record PreparedInputGateResult(
+        bool Ready,
+        bool VoiceStateChanged,
+        bool Expired,
+        AdapterIdleProbeResult? Probe);
 
     private static SubmissionOutcome MapAdapterStatus(WebAdapterStatus status) => status switch
     {
@@ -931,7 +1416,9 @@ public partial class MainWindow : Window
         GameMateState.Idle => T("等待打开 ChatGPT。", "Waiting for ChatGPT."),
         GameMateState.BrowserReady => T("浏览器已就绪；请登录、开启 Voice 并确认。", "Browser ready; sign in, start Voice, and confirm."),
         GameMateState.Ready => T("Voice 已确认；可发送角色设定或开始陪玩。", "Voice confirmed; initialize the role or start."),
-        GameMateState.Running => T("正在运行；每 2 分钟自动发送。", "Running; automatic send every two minutes."),
+        GameMateState.Running => T(
+            "正在运行；首轮 30 秒，之后每 2 分钟自动发送。",
+            "Running; first send after 30 seconds, then every two minutes."),
         GameMateState.Sending => T("正在处理一张截图；不会并发或排队。", "Processing one screenshot; no concurrency or queue."),
         GameMateState.Paused => T("已暂停；到期事件会跳过。", "Paused; due occurrences are skipped."),
         GameMateState.VoiceOnly => T("图片额度受限；保持纯语音，不再自动发送。", "Image quota limited; Voice-only mode, no more automatic sends."),
@@ -963,7 +1450,21 @@ public partial class MainWindow : Window
         int? imageHeight = null,
         long? fileSizeBytes = null,
         string? exceptionType = null,
-        AdapterDiagnostics? adapterDiagnostics = null)
+        AdapterDiagnostics? adapterDiagnostics = null,
+        DateTimeOffset? scheduledAt = null,
+        DateTimeOffset? pendingCreatedAt = null,
+        DateTimeOffset? deferredAt = null,
+        string? deferredReason = null,
+        DateTimeOffset? idleCandidateAt = null,
+        long? idleStableDurationMs = null,
+        WebAudioState? audioState = null,
+        long? audioSilentDurationMs = null,
+        DateTimeOffset? attachStartedAt = null,
+        DateTimeOffset? textSetAt = null,
+        DateTimeOffset? submitStartedAt = null,
+        bool? voiceStateChangedAfterAttach = null,
+        bool? skippedBecauseConversationBusy = null,
+        DateTimeOffset? pendingExpiredAt = null)
     {
         try
         {
@@ -978,7 +1479,21 @@ public partial class MainWindow : Window
                 imageHeight,
                 fileSizeBytes,
                 exceptionType,
-                adapterDiagnostics));
+                adapterDiagnostics,
+                scheduledAt,
+                pendingCreatedAt,
+                deferredAt,
+                deferredReason,
+                idleCandidateAt,
+                idleStableDurationMs,
+                audioState,
+                audioSilentDurationMs,
+                attachStartedAt,
+                textSetAt,
+                submitStartedAt,
+                voiceStateChangedAfterAttach,
+                skippedBecauseConversationBusy,
+                pendingExpiredAt));
         }
         catch
         {

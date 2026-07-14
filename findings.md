@@ -10,6 +10,26 @@
 
 ## 研究发现
 
+- 2026-07-14 用户完成 A–D 真实定位：Capture、AttachImage、SetText 均不会停止 Voice；页面显示可发送本身也不会停止 Voice，但真正提交成功会停止仍在播放的声音。
+- 确切中断阶段为 `Submit`，并与 `Voice playback tail` 叠加：ChatGPT 的 `stop-button`/`send-button` 状态不能证明 WebView2 音频已经播放完毕。
+- WebView2 的 `CoreWebView2.IsDocumentPlayingAudio` 与 `IsDocumentPlayingAudioChanged` 只反映当前 WebView 文档是否正在输出音频，不是系统回环录音；本修复只保存布尔状态、状态版本与静音持续时间，不接触音频内容。
+- 自动调度已改为容量严格为 1 的 PendingSend：周期到达只登记待发送；音频至少连续静音 3 秒，并且页面与音频状态连续稳定 6 秒后才捕获最新画面；超过 90 秒则跳过，不建立旧截图队列。
+- 图片和文字进入 composer 后，提交前会再次检查页面结构、附件、按钮状态和同一音频状态版本；任何变化都失败关闭，不点击提交。
+- 2026-07-14 首轮修复版真实日志显示 PendingSend 因 `send-button-count-idle-probe` 持续延后并在 90 秒过期：ChatGPT 的空 composer 不渲染 send-button，原实现把“内容准备完成后的提交规则”错误用于“准备前空输入区”。
+- 修正规则分层：准备前允许目标 form 内 send-button 为 0，或为唯一的 disabled/可用按钮，但必须是无附件的唯一 composer、无 stop-button、无按钮歧义且音频连续静音；图片和文字准备完成后仍要求唯一、可用、位于目标 form 内的 send-button，并在点击前二次检查。
+- 用户明确要求首轮自动尝试由 2 分钟改为开始后 30 秒；后续周期仍固定为 2 分钟，不新增可配置项。
+- 修正版真实诊断记录了连续两次完整成功链路：`pending.ready` → `capture.succeeded` → `submission.attachment-prepared` → `submission.pre-submit-check=ok` → `adapter.submit-probe=ok` → `submission.succeeded`。第二轮期间 WebView2 音频多次切换，程序持续延后并在稳定静音后才执行。
+- 用户确认本轮真实测试成功。当前小范围验收进度为连续成功 2/3；尚未取得第三次成功和“真实 Voice 忙碌超过 90 秒安全跳过”的人工证据，不能宣称完整小范围验收完成。
+- 游戏声音可能通过物理麦克风串音或系统回环输入进入 ChatGPT Voice。用户决定本阶段暂不处理；保持 OpenGameMate 不录音、不处理或转发麦克风音频，并将耳机与实体麦克风作为当前运行建议。
+- 自动化审计补充虚拟时钟证据：首轮只在 30 秒触发，后续只在再等待完整 2 分钟后触发；暂停状态到期会跳过且不重置节拍。慢任务即使跨过多个 2 分钟边界也不会保留追赶 tick 或在结束后立即补发。
+- 提交前状态锁已扩展：最终 readiness 探测得到的 `AdapterPageState` 会传入一次性提交，控制探测和点击前脚本均要求页面状态保持一致；变化时返回 `NotReady` 且不点击。
+- 真实日志显示首轮 `run.started` 到 `pending.created` 为 30.010 秒；第一轮稳定空闲 3.216 秒后捕获，第二轮在音频多次切换期间延后约 68 秒，并仅在页面稳定 3.179 秒且音频静音 3.365 秒后捕获。
+- 后续真实失败日志定位出新的竞态：Voice 在约 3.2 秒静音后被判为可准备，但约 5.2 秒时再次输出；旧逻辑在附件准备后把这类正常会话恢复错误归类为 `AdapterInvalid`。修复将稳定门槛提高为 6 秒，并把附件准备期间 Voice 恢复归类为普通失败，保持不点击发送且不进入 `AdapterError`。
+- 6 秒版本的真实测试仍发生中断：日志证明音频已连续静音约 6.5 秒且提交链路结构检查全部通过，但用户确认 Voice 对话仍在进行。这说明 `IsDocumentPlayingAudio` 无法覆盖 Voice 听取/识别阶段。进一步审计发现 Voice 活动控件在 composer form 外，而旧探测只在 form 内查找，导致页面被误记为普通 `ComposerWithAttachment`；现改为用精确 `data-testid` 做文档级 Voice 活动探测，并锁定准备前后的页面状态。
+- 文档级 Voice 探测版的真实结果仍不满足目标：首个 PendingSend 在持续聊天期间延后 90 秒并安全过期，下一轮在页面/音频稳定后成功提交图片；Voice 没有被自动提交中断，但也没有对该图片消息作出语音回应。截图中的“语音聊天已结束”是用户之后手动结束 Voice 的结果，不能归因于自动提交。需要用 ChatGPT 网页自身的加号和发送控件做一次手动图片对照实验，区分平台行为与适配器提交差异。
+- 网页原生手动图片对照已通过：用户在同一 Voice 会话中手动上传图片并发送明确请求“请根据这张图片继续和我对话”，ChatGPT 能结合图片继续语音回应。自动消息原文只是背景更新说明，没有明确要求立即回应；因此先保持附件和提交路径不变，仅把自动随图文字改为明确要求立即继续当前 Voice 对话，以单变量验证提示语是否为根因。
+- 强化提示语后的自动链路总体可用。由于调度只在对话空闲时发送，最终自动随图文字改为要求 ChatGPT 根据最新画面主动发起一个自然、简短的话题并立即语音回应，同时明确避免机械复述或图片分析；附件、调度和提交规则保持不变。
+
 - 仓库初始只有 `.git`，尚无代码或仓库内开发文档。
 - 用户提供的权威文档位于 `OpenGameMate_v0.1.0 development document (external attachment)`。
 - 开发文档技术基线为 C# / .NET 8 / WPF / WebView2 / Windows Graphics Capture。
@@ -130,3 +150,11 @@
 - 配置文件最大 64 KiB，使用严格 camelCase JSON、字符串枚举、未知字段拒绝和 SchemaVersion=1；自动截图周期刻意不进入设置模型。
 - 诊断事件最大 8 KiB，按 UTC 日期写 JSONL；模型只有固定布尔/数值/状态/代码字段，不存在任意 `message`、`detail` 或 `path` 字段。
 - 状态机的无效触发不会改变状态；额度错误仅允许从 `Sending` 进入 `VoiceOnly`，适配恢复必须由 `AdapterRecovered` 显式进入 `BrowserReady`。
+## P0 Voice 播放尾音问题（2026-07-14）
+
+- 已确认上一轮提交就绪等待逻辑解决附件实际提交问题，但 `stop-button` 消失与 `send-button` 可用只代表 DOM 允许发送，不足以证明 WebView2 音频播放已经完全结束。
+- 本轮必须先区分 Capture、AttachImage、SetText、Submit 和 Voice playback tail；在真实证据前不预设中断阶段。
+- 最终调度目标固定为容量 1 的 PendingSend，最多延后 90 秒，真正发送前才捕获最新画面，过期直接跳过且不补发。
+- Microsoft WebView2 官方 API 提供 `CoreWebView2.IsDocumentPlayingAudio` 与 `IsDocumentPlayingAudioChanged`：前者仅表示该 CoreWebView2 是否存在音频输出（即使 WebView 被静音也为 true），后者在该文档开始或停止播放音频时触发。来源：https://learn.microsoft.com/en-us/dotnet/api/microsoft.web.webview2.core.corewebview2.isdocumentplayingaudio 和 https://learn.microsoft.com/en-us/dotnet/api/microsoft.web.webview2.core.corewebview2.isdocumentplayingaudiochanged
+- 该信号属于当前 WebView 实例，不是系统回环音频或默认输出设备监控，因此不会错误采集游戏、语音软件或其他应用的声音；它只提供布尔播放状态，不包含音频样本、内容或识别结果。
+- 当前项目引用 `Microsoft.Web.WebView2` 1.0.4078.44，已通过程序集反射确认 `CoreWebView2` 同时包含上述属性与事件，可直接实现连续静音 3 秒门控，无需新增音频采集依赖。

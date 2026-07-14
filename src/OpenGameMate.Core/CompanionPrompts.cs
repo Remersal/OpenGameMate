@@ -11,8 +11,8 @@ public static class CompanionPrompts
     public static string AutomaticScreenshot(CompanionPromptLanguage language) => language switch
     {
         CompanionPromptLanguage.English =>
-            "Background game-screen update. Continue the current topic while we are talking; when idle, use the screen to find a natural topic.",
-        _ => "后台游戏画面更新。正在交谈时请继续当前话题；空闲时可以根据画面自然找话题。",
+            "The background game screen has been updated while our conversation is idle. Use the latest image to start one natural, brief topic and respond now in voice. Do not give a mechanical image-analysis report.",
+        _ => "后台游戏画面已在对话空闲时更新。请结合最新画面主动发起一个自然、简短的话题并立即用语音回应，不要机械地复述或分析图片。",
     };
 
     public static string ManualScreenshot(CompanionPromptLanguage language) => language switch

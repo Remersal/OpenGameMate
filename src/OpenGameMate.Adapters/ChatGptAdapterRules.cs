@@ -12,7 +12,7 @@ public sealed record ChatGptAdapterRules
     public static ChatGptAdapterRules BuiltIn { get; } = new()
     {
         SchemaVersion = CurrentSchemaVersion,
-        RulesVersion = "builtin-2026.07.14-p0-1",
+        RulesVersion = "builtin-2026.07.14-p0-2",
         ComposerSelector = "#prompt-textarea",
         FileInputSelector = "input[type=\"file\"]",
         SendButtonSelector = "button[data-testid=\"send-button\"]",

@@ -18,6 +18,23 @@ public sealed class ProductIntegrationTests
         Assert.NotEqual(
             CompanionPrompts.AutomaticScreenshot(language),
             CompanionPrompts.ManualScreenshot(language));
+        if (language == CompanionPromptLanguage.ChineseSimplified)
+        {
+            Assert.Contains("主动发起", CompanionPrompts.AutomaticScreenshot(language));
+            Assert.Contains("语音回应", CompanionPrompts.AutomaticScreenshot(language));
+        }
+        else
+        {
+            Assert.Contains(
+                "start one natural",
+                CompanionPrompts.AutomaticScreenshot(language),
+                StringComparison.OrdinalIgnoreCase);
+            Assert.Contains(
+                "respond now in voice",
+                CompanionPrompts.AutomaticScreenshot(language),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
         Assert.InRange(CompanionPrompts.FullRole(language).Length, 1, 8000);
     }
 

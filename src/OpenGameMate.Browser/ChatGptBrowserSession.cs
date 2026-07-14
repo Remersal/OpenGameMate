@@ -4,6 +4,20 @@ using Microsoft.Web.WebView2.Wpf;
 
 namespace OpenGameMate.Browser;
 
+public sealed class BrowserAudioStateChangedEventArgs(bool isPlaying, DateTimeOffset observedAt) : EventArgs
+{
+    public bool IsPlaying { get; } = isPlaying;
+
+    public DateTimeOffset ObservedAt { get; } = observedAt;
+}
+
+public sealed record BrowserAudioSnapshot(
+    bool IsKnown,
+    bool IsPlaying,
+    long Version,
+    DateTimeOffset StateChangedAt,
+    TimeSpan SilentDuration);
+
 public sealed class ChatGptBrowserSession : IDisposable
 {
     private readonly WebView2 _webView;
@@ -11,8 +25,13 @@ public sealed class ChatGptBrowserSession : IDisposable
     private readonly Func<Uri, Task<bool>> _microphonePermissionPrompt;
     private readonly string? _browserExecutableFolder;
     private readonly BrowserNavigationPolicy _navigationPolicy;
+    private readonly object _audioSync = new();
     private bool _eventHandlersAttached;
     private bool _disposed;
+    private bool _audioStateKnown;
+    private bool _audioPlaying;
+    private long _audioStateVersion;
+    private DateTimeOffset _audioStateChangedAt;
 
     public ChatGptBrowserSession(
         WebView2 webView,
@@ -36,7 +55,11 @@ public sealed class ChatGptBrowserSession : IDisposable
 
     public event EventHandler<CoreWebView2ProcessFailedEventArgs>? ProcessFailed;
 
+    public event EventHandler<BrowserAudioStateChangedEventArgs>? AudioStateChanged;
+
     public bool IsInitialized => _webView.CoreWebView2 is not null;
+
+    public bool IsDocumentPlayingAudio => IsInitialized && Core.IsDocumentPlayingAudio;
 
     public CoreWebView2 Core => _webView.CoreWebView2
         ?? throw new InvalidOperationException("WebView2 has not been initialized.");
@@ -64,7 +87,9 @@ public sealed class ChatGptBrowserSession : IDisposable
         Core.NewWindowRequested += OnNewWindowRequested;
         Core.PermissionRequested += OnPermissionRequested;
         Core.ProcessFailed += OnProcessFailed;
+        Core.IsDocumentPlayingAudioChanged += OnIsDocumentPlayingAudioChanged;
         _eventHandlersAttached = true;
+        UpdateAudioState(Core.IsDocumentPlayingAudio, DateTimeOffset.UtcNow);
 
         Core.Navigate("https://chatgpt.com/");
         RaiseStatus($"WebView2 {Core.Environment.BrowserVersionString} initialized with an isolated user data folder.");
@@ -195,6 +220,48 @@ public sealed class ChatGptBrowserSession : IDisposable
         ProcessFailed?.Invoke(this, args);
     }
 
+    private void OnIsDocumentPlayingAudioChanged(object? sender, object args) =>
+        UpdateAudioState(Core.IsDocumentPlayingAudio, DateTimeOffset.UtcNow, raiseEvent: true);
+
+    public BrowserAudioSnapshot GetAudioSnapshot(DateTimeOffset observedAt)
+    {
+        lock (_audioSync)
+        {
+            return new(
+                _audioStateKnown,
+                _audioPlaying,
+                _audioStateVersion,
+                _audioStateChangedAt,
+                _audioStateKnown && !_audioPlaying && observedAt >= _audioStateChangedAt
+                    ? observedAt - _audioStateChangedAt
+                    : TimeSpan.Zero);
+        }
+    }
+
+    private void UpdateAudioState(
+        bool isPlaying,
+        DateTimeOffset observedAt,
+        bool raiseEvent = false)
+    {
+        lock (_audioSync)
+        {
+            if (!_audioStateKnown || _audioPlaying != isPlaying)
+            {
+                _audioStateKnown = true;
+                _audioPlaying = isPlaying;
+                _audioStateChangedAt = observedAt;
+                _audioStateVersion++;
+            }
+        }
+
+        if (raiseEvent)
+        {
+            AudioStateChanged?.Invoke(
+                this,
+                new BrowserAudioStateChangedEventArgs(isPlaying, observedAt));
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -210,11 +277,13 @@ public sealed class ChatGptBrowserSession : IDisposable
             Core.NewWindowRequested -= OnNewWindowRequested;
             Core.PermissionRequested -= OnPermissionRequested;
             Core.ProcessFailed -= OnProcessFailed;
+            Core.IsDocumentPlayingAudioChanged -= OnIsDocumentPlayingAudioChanged;
             _eventHandlersAttached = false;
         }
 
         StatusChanged = null;
         ProcessFailed = null;
+        AudioStateChanged = null;
     }
 
     private void RaiseStatus(string message) => StatusChanged?.Invoke(this, message);

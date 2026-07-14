@@ -18,6 +18,13 @@ public enum WebAdapterStatus
     PlatformError,
 }
 
+public enum WebAudioState
+{
+    Unknown,
+    Silent,
+    Playing,
+}
+
 public enum AdapterPageState
 {
     Unknown,
@@ -63,6 +70,36 @@ public sealed record InputPreparationResult(
     WebAdapterStatus Status)
 {
     public bool ImageAdded => FileInputSelected || AttachmentPreviewDetected;
+}
+
+public sealed record AdapterIdleProbeResult(
+    bool DomainCorrect,
+    int ComposerCount,
+    int StopButtonCount,
+    int SendButtonCount,
+    bool SendButtonDisabled,
+    bool SendButtonInComposerForm,
+    string Code,
+    WebAdapterStatus Status,
+    AdapterDiagnostics Diagnostics)
+{
+    public bool IsSafeToPrepare =>
+        DomainCorrect &&
+        ComposerCount == 1 &&
+        StopButtonCount == 0 &&
+        SendButtonCount is 0 or 1 &&
+        (SendButtonCount == 0 || SendButtonInComposerForm) &&
+        Diagnostics.PageState == AdapterPageState.Composer &&
+        Status != WebAdapterStatus.AdapterInvalid;
+
+    public bool IsIdle =>
+        DomainCorrect &&
+        ComposerCount == 1 &&
+        StopButtonCount == 0 &&
+        SendButtonCount == 1 &&
+        !SendButtonDisabled &&
+        SendButtonInComposerForm &&
+        Status == WebAdapterStatus.Succeeded;
 }
 
 public sealed record TextPreparationResult(
