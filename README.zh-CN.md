@@ -13,10 +13,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Remersal/OpenGameMate" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/platform-Windows-0078D4?logo=windows11&amp;logoColor=white" alt="Windows">
   <img src="https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&amp;logoColor=white" alt=".NET 8">
+  <a href="https://github.com/Remersal/OpenGameMate/releases/tag/v0.1.0"><img src="https://img.shields.io/github/v/release/Remersal/OpenGameMate?include_prereleases&amp;label=release" alt="最新版本"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Remersal/OpenGameMate/releases"><strong>下载</strong></a> ·
+  <a href="https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Setup-0.1.0.exe"><strong>安装版</strong></a> ·
+  <a href="https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-v0.1.0-win-x64.zip"><strong>便携版</strong></a> ·
   <a href="#实际效果与演示"><strong>演示</strong></a> ·
   <a href="docs/RELEASE_NOTES_0.1.0.md"><strong>文档</strong></a> ·
   <a href="README.md"><strong>English</strong></a>
@@ -47,11 +49,16 @@
 
 ## 下载与快速开始
 
-> **v0.1.0 public preview is being prepared。** 当前还没有已发布的 GitHub Release 或公开二进制文件。
+> **v0.1.0 Early Preview 已可下载。** 这是早期公开测试版，不代表所有环境都能兼容。
 
-安装版与便携版发布后会出现在 [Releases 页面](https://github.com/Remersal/OpenGameMate/releases)，README 也会在真实文件存在后添加对应直链。
+- [下载 Windows x64 安装版](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Setup-0.1.0.exe)
+- [下载 Windows x64 便携版 ZIP](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-v0.1.0-win-x64.zip)
+- [查看 SHA-256 校验值](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/SHA256SUMS.txt)
+- [查看 GitHub Release](https://github.com/Remersal/OpenGameMate/releases/tag/v0.1.0)
 
-现阶段可以先[从源码构建](#从源码构建)：
+安装包目前**没有 Authenticode 数字签名**，Windows 可能显示未知发布者或信誉提示。安装时还必须明确确认可能存在的游戏账号风险。便携版依赖 .NET 8 Desktop Runtime 和 WebView2 Runtime。
+
+安装或解压后：
 
 1. 启动 OpenGameMate。程序不会自动打开 ChatGPT，也不会自动截图。
 2. 点击“打开 ChatGPT”，自行登录并开启 Voice。

@@ -13,10 +13,12 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Remersal/OpenGameMate" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/platform-Windows-0078D4?logo=windows11&amp;logoColor=white" alt="Windows">
   <img src="https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&amp;logoColor=white" alt=".NET 8">
+  <a href="https://github.com/Remersal/OpenGameMate/releases/tag/v0.1.0"><img src="https://img.shields.io/github/v/release/Remersal/OpenGameMate?include_prereleases&amp;label=release" alt="Latest Release"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Remersal/OpenGameMate/releases"><strong>Download</strong></a> ·
+  <a href="https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Setup-0.1.0.exe"><strong>Installer</strong></a> ·
+  <a href="https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-v0.1.0-win-x64.zip"><strong>Portable</strong></a> ·
   <a href="#demo"><strong>Demo</strong></a> ·
   <a href="docs/RELEASE_NOTES_0.1.0.md"><strong>Documentation</strong></a> ·
   <a href="README.zh-CN.md"><strong>简体中文</strong></a>
@@ -47,11 +49,16 @@ Want to help record the real flow? Follow the [20–40 second demo recording gui
 
 ## Download and quick start
 
-> **v0.1.0 public preview is being prepared.** There is no published GitHub Release or public binary yet.
+> **v0.1.0 Early Preview is available.** This is a public testing build, not a claim of universal compatibility.
 
-Check the [Releases page](https://github.com/Remersal/OpenGameMate/releases) for the installer and portable package when they are published. This README will link directly to each real asset after it exists.
+- [Download the Windows x64 installer](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Setup-0.1.0.exe)
+- [Download the Windows x64 portable ZIP](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-v0.1.0-win-x64.zip)
+- [View SHA-256 checksums](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/SHA256SUMS.txt)
+- [Read the GitHub Release](https://github.com/Remersal/OpenGameMate/releases/tag/v0.1.0)
 
-Until then, you can [build from source](#build-from-source):
+The installer is currently **not Authenticode-signed**, so Windows may show an unknown-publisher or reputation warning. Installation also requires explicit acknowledgement of the possible game-account risk. The portable package is framework-dependent and requires .NET 8 Desktop Runtime and WebView2 Runtime.
+
+After installing or extracting:
 
 1. Start OpenGameMate. It does not open ChatGPT or capture the screen automatically.
 2. Select **Open ChatGPT**, sign in yourself, and start Voice.
