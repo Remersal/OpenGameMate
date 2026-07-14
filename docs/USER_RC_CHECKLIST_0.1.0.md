@@ -12,7 +12,7 @@
 | --- | --- |
 | 测试人 | 用户真实环境验收 |
 | 测试日期 | 2026-07-14 |
-| Git/构建版本 | `bc28fad` |
+| Git/构建版本 | `4c671bf` |
 | Windows 版本 |  |
 | .NET Desktop Runtime |  |
 | WebView2 Runtime |  |

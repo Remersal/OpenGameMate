@@ -12,6 +12,12 @@
 - 显式传入 Inno Setup 6.7.3 后，便携版与中英双语安装包预检构建成功，两个发布边界的隐私扫描均通过。
 - 带调试信息的各库 Release DLL 已验证只包含 `/_/src/...` 虚拟 PDB 路径，不含本机用户路径；正式便携版关闭调试信息，因此不包含源码或 PDB 路径。
 - 全解决方案构建因正在运行的 OpenGameMate PID 7852 锁住应用输出而失败；未关闭或操作用户进程，后续改用不触碰该输出的测试项目和隔离发布验证。
+- 第一次历史重写清除了截图、生成图和安装器路径，但未匹配包含中文文件名的下载路径；没有把该结果当作完成。
+- 改用全 ASCII 通配规则进行第二次重写后，`master` 的 21 个提交逐个扫描均不再包含本机用户路径；21 个文档提交引用已映射到新哈希。
+- 已删除 `refs/original` 和一条仍指向旧隐私树的 Codex 内部基线引用；最终提交后将过期 reflog 并运行 Git GC 清除不可达旧对象。
+- 已从重写后的源码生成 `artifacts/release/OpenGameMate-v0.1.0-win-x64-public-clean` 和 `artifacts/installer/v0.1.0-public-clean/OpenGameMate-Setup-0.1.0.exe`。
+- 最终验证：127/127 测试、格式、发布元数据、当前树、21 个历史提交、剩余 Git 引用、便携版和安装器隐私扫描均通过；安装包不含 PDB。
+- 最终安装器大小 6,462,035 字节，SHA-256 为 `F7C73284D27C59C55AC80726828BE6476B3BF0EF8E798D95AF70A497E5B1533E`；Authenticode 状态仍为 `NotSigned`，未伪报签名。
 
 ## 会话：2026-07-14（首次安装账号风险提示）
 
@@ -33,7 +39,7 @@
 ## 会话：2026-07-14（正式图标与安装版）
 
 - 用户要求在生成安装版前先生成图标，并已选定第二款方案。
-- 已确认源图存在，当前 HEAD 为 `1ba061a`，开始时工作区干净。
+- 已确认源图存在，当前 HEAD 为 `a83b995`，开始时工作区干净。
 - 已核对 WPF 项目、Inno Setup 定义和发布脚本：尚未接入正式图标，发布脚本要求全新空输出目录。
 - 已保存正式 PNG，并生成含九个尺寸层级的 ICO；已接入 EXE、窗口、托盘、快捷方式、卸载项与安装器。
 - Debug 构建 0 警告/0 错误；127/127 测试、格式和发布元数据通过。
@@ -47,7 +53,7 @@
 ## 会话：2026-07-14（空闲等待四档配置）
 
 - 用户确认上一轮 10 秒空闲自动截图和主动截图快捷键已经通过真实验证。
-- 当前 HEAD 为 `d71fe26`，工作区干净。
+- 当前 HEAD 为 `7f3520d`，工作区干净。
 - 已确定新增四档：10、15、30、60 秒，默认 10 秒；选择变化从下一个 PendingSend 生效，当前 PendingSend 保留创建时档位。
 - 已完成严格配置验证、旧 Schema v1 默认兼容、PendingSend 实例门槛、截图/准备/提交二次检查贯穿和 WPF 双语下拉选项。
 - 已同步 AGENTS、README、CHANGELOG、架构、Release Notes、测试计划和用户 RC 清单。
@@ -59,7 +65,7 @@
 
 ## 会话：2026-07-14（对话空闲截图与可配置快捷键）
 
-- 已恢复并读取持久化计划、仓库约束及当前干净提交 `6a37197`。
+- 已恢复并读取持久化计划、仓库约束及当前干净提交 `c8a1549`。
 - 已核对当前自动调度、PendingSend、WebView2 文档音频、网页空闲探测、配置 Schema、WPF 控件和测试结构。
 - 用户明确最终语义：ChatGPT 网页音频停止且页面空闲连续稳定约 10 秒后，才开始截图和操作输入区域；第 10 秒前不预先准备输入。
 - 已确定自动触发同一空闲段只执行一次，页面或音频恢复活动后重新计时。
@@ -82,7 +88,7 @@
 
 - 按持续目标恢复开发：按照计划继续，测试统一留到所有开发修改完成后。
 - 已重新读取文件化规划技能和仓库内 `task_plan.md`、`findings.md`、`progress.md`，会话恢复脚本未发现未同步上下文。
-- 当前提交为 `b3bd032 docs: record Voice scheduling validation`；工作区干净。
+- 当前提交为 `abd441f docs: record Voice scheduling validation`；工作区干净。
 - 已建立发布文档、版本/打包、配置边界、最终统一验证和独立提交五步计划；本阶段尚未运行测试。
 - 文档审计发现中文 README、CHANGELOG、发布说明和测试计划尚未完整反映已验收的首轮 30 秒、Voice 空闲延后与主动话题行为；已记录准确修改范围。
 - 首次读取发布说明使用了错误文件名，已用仓库文件清单定位到 `docs/RELEASE_NOTES_0.1.0.md`；未重复失败路径。
@@ -111,7 +117,7 @@
 ### v1 阶段：模块化解决方案、配置、诊断与状态机
 - **状态：** complete
 - Release 构建成功，40/40 测试通过，新增文件范围格式检查通过。
-- 已创建独立提交 `ff70dc4 feat: add configuration diagnostics and state machine`。
+- 已创建独立提交 `dda1d88 feat: add configuration diagnostics and state machine`。
 
 ### v2 阶段：浏览器
 - **状态：** complete
@@ -120,7 +126,7 @@
 - 已实现默认拒绝的顶层导航策略：OpenAI 官方域及精确身份提供商入口可用，其余未知 HTTPS、非默认端口、非 HTTPS 和仿冒域名被拒绝。
 - 已实现浏览器事件订阅的确定性释放、一次自动恢复闸门，并在 WPF 宿主关闭前释放浏览器会话。
 - Release 构建成功，54/54 测试通过，本阶段文件格式检查通过。
-- 已创建独立提交 `666590f feat: harden browser session lifecycle`。
+- 已创建独立提交 `c88ed70 feat: harden browser session lifecycle`。
 
 ### v3 阶段：截图
 - **状态：** complete
@@ -128,7 +134,7 @@
 - 已固定 1920×1080 上限、禁止放大，加入串行捕获闸门和完整编码后替换最终 PNG 的工作文件流程。
 - 已加入稳定错误代码，并确保失败清理不会遮蔽原始捕获错误；受保护内容和独占全屏不做绕过。
 - Release 构建成功，56/56 测试通过，本阶段文件格式检查通过。为避免无提示捕获用户桌面，本阶段未自动执行真实截图；沿用 Phase 0 已通过的真实主屏捕获证据。
-- 已创建独立提交 `ad5a4df feat: productize primary display capture`。
+- 已创建独立提交 `59ca3dd feat: productize primary display capture`。
 
 ### v4 阶段：调度
 - **状态：** complete
@@ -137,7 +143,7 @@
 - 已实现无队列单提交协调器；同时发生时手动请求优先，已运行的任务不被抢占。
 - 已实现 2 小时或 60 张成功图片的一次性会话提醒及新会话重置。
 - Release 构建成功，63/63 测试通过，本阶段文件格式检查通过。
-- 已创建独立提交 `a954dbc feat: add fixed interval submission scheduling`。
+- 已创建独立提交 `564a54c feat: add fixed interval submission scheduling`。
 
 ### v5 阶段：网页适配
 - **状态：** complete
@@ -147,7 +153,7 @@
 - 已实现官方 GitHub 精确来源、HTTPS/default port、最终重定向 URI、64 KiB 文档、32 KiB 负载、严格 Schema/字段和 RSA-PSS/SHA-256 签名验证；任何失败回退内置规则。
 - 当前仓库无官方 GitHub remote 和维护者签名公钥，故远程检查保持安全禁用且不发网络请求；不得在客户端仓库生成或保存私钥。
 - Release 构建成功，75/75 测试通过，本阶段文件格式检查通过；真实网页路径沿用 Phase 0 已通过证据，未自动启动或发送。
-- 已创建独立提交 `b6aa636 feat: add fail-closed ChatGPT adapter rules`。
+- 已创建独立提交 `37c8f02 feat: add fail-closed ChatGPT adapter rules`。
 
 ### v6 阶段：WPF 界面与集成
 - **状态：** complete
@@ -347,7 +353,7 @@
 - 用户要求严格顺序：模块化解决方案/配置/诊断/状态机 → 浏览器 → 截图 → 调度 → 网页适配 → WPF 界面。
 - 每阶段必须运行测试并创建独立 Git 提交，不一次性修改全部模块。
 - 当前仓库最初没有提交；安全扫描未发现凭据，`.dotnet`、`bin`、`obj` 等构建产物均被忽略。
-- Phase 0 Release 测试 30/30 后建立基线提交：`377a506 chore: archive Phase 0 feasibility baseline`。
+- Phase 0 Release 测试 30/30 后建立基线提交：`3ba2353 chore: archive Phase 0 feasibility baseline`。
 - 首次提交因缺少 Git 作者身份失败；仅在当前仓库设置 `Codex <codex@openai.com>` 后成功，没有修改全局 Git 配置。
 - 进入 v1 基础设施阶段；本阶段不修改浏览器、截图、调度、网页适配或 WPF 产品功能。
 - v1 新增 `Directory.Build.props`，统一启用 nullable、隐式 using、确定性构建和警告即错误。
@@ -359,7 +365,7 @@
 ## P0 Voice 播放尾音修复启动（2026-07-14）
 
 - 用户真实验证上一轮 Voice + 附件提交修复成功：图片进入输入区、等待 send-button、真实提交、两分钟自动截图连续运行均通过。
-- 已将上一轮 9 个文件创建独立提交：`c0c08f17b3c65646dbe8ad058275982aaa4c5ef9`，提交后工作区为空。
+- 已将上一轮 9 个文件创建独立提交：`8e6956b97bde9f014b2a465c8f205af542228d2d`，提交后工作区为空。
 - 新阶段只处理自动截图可能打断 Voice 发言的问题；先执行 A–D 最小定位，不执行完整 RC。
 - 已核对官方 WebView2 文档并验证当前程序集：可使用当前 WebView 实例级 `IsDocumentPlayingAudio`/`IsDocumentPlayingAudioChanged`，不会监控系统其他应用音频。
 

@@ -2,7 +2,7 @@
 
 ## 当前范围
 
-- Phase 0 已完成并由提交 `377a506` 固化；当前按开发文档实施 **OpenGameMate v0.1.0 Early Preview**。
+- Phase 0 已完成并由提交 `3ba2353` 固化；当前按开发文档实施 **OpenGameMate v0.1.0 Early Preview**。
 - 权威范围依据是用户提供的 `OpenGameMate_v0.1.0_开发文档.md` 和已完成的 `docs/PHASE0_FEASIBILITY_REPORT.md`。
 - 技术基线：C#、.NET 8、WPF、Microsoft Edge WebView2、Windows Graphics Capture、JSON 配置、本地结构化日志、xUnit。
 - 只实现文档明确列出的 v0.1.0；不得扩展到账号系统、商业化、游戏注入、内存读取、攻略引擎、角色商城或绕过平台限制。
