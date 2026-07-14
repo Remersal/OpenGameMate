@@ -1,63 +1,108 @@
-# OpenGameMate v0.1.0
+[简体中文](README.zh-CN.md)
 
-OpenGameMate 是一个开源 Windows 桌面学习项目：它在主窗口内嵌的独立 WebView2 环境中打开 ChatGPT，由用户自行登录和开启 Voice。用户明确开始后，只有在 ChatGPT 网页音频停止且页面连续安全空闲达到所选的 10、15、30 或 60 秒时，程序才捕获最新主显示器画面并提交简短提示；默认 10 秒，同一空闲段只触发一次，恢复交谈后重新计时。
+<p align="center">
+  <img src="assets/OpenGameMate.AppIcon.png" width="128" alt="OpenGameMate icon">
+</p>
 
-OpenGameMate is an open-source Windows desktop learning project. It opens ChatGPT in an isolated WebView2 session under the user's control. After the user explicitly starts companion mode, a fresh primary-display image and short prompt are submitted only after ChatGPT web audio stops and the page remains safely idle for the selected 10, 15, 30, or 60 seconds. The default is 10 seconds. A continuous idle window triggers only once and is rearmed after conversation activity resumes.
+<h1 align="center">OpenGameMate</h1>
 
-OpenGameMate is not an OpenAI product, official extension, or unlimited-quota tool.
+<p align="center"><strong>Let ChatGPT Voice watch your gameplay and chat like a gaming buddy.</strong></p>
 
-OpenGameMate is an independent open-source project and is not affiliated with or endorsed by OpenAI.
+<p align="center">
+  <a href="https://github.com/Remersal/OpenGameMate/actions/workflows/ci.yml"><img src="https://github.com/Remersal/OpenGameMate/actions/workflows/ci.yml/badge.svg" alt="CI build"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Remersal/OpenGameMate" alt="MIT License"></a>
+  <img src="https://img.shields.io/badge/platform-Windows-0078D4?logo=windows11&amp;logoColor=white" alt="Windows">
+  <img src="https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&amp;logoColor=white" alt=".NET 8">
+</p>
 
-## 安全与隐私 / Safety and privacy
+<p align="center">
+  <a href="https://github.com/Remersal/OpenGameMate/releases"><strong>Download</strong></a> ·
+  <a href="#demo"><strong>Demo</strong></a> ·
+  <a href="docs/RELEASE_NOTES_0.1.0.md"><strong>Documentation</strong></a> ·
+  <a href="README.zh-CN.md"><strong>简体中文</strong></a>
+</p>
 
-- 不读取 ChatGPT 回复、聊天记录、账号、Cookie、Token、完整 HTML 或音频。
-- 不注入游戏、不读游戏内存、不模拟全局键鼠、不绕过反作弊、验证码、额度或受保护内容。
-- 即使不注入或读取游戏内存，第三方陪玩或自动化工具仍可能违反游戏或平台规则，并可能导致警告、限制或封禁账号；安装时必须明确确认该风险。
-- 截图只写入一个应用临时 PNG，提交尝试结束后删除；异常重启不恢复截图或运行状态。
-- 首次开始前必须确认“捕获整个主显示器”的隐私风险。
-- 后台图片提交、Voice 忙碌延后、90 秒过期跳过和空闲后主动话题已完成小范围真实验证；网页结构、账号能力、独占全屏、额度和平台政策仍会变化，完整 RC 与长时间稳定性仍需单独验收。
+<p align="center">
+  An open-source Windows desktop app that uses the ChatGPT website and Voice session you sign in to yourself—no developer API key required.<br>
+  After the conversation becomes idle, it sends the latest game screen so the AI can respond, tease, or start a new topic naturally.<br>
+  You stay in control of sign-in, Voice, screen capture, and when companion mode runs.
+</p>
 
-- Does not read ChatGPT replies, history, accounts, cookies, tokens, full HTML, or audio.
-- Does not inject into games, read game memory, synthesize global input, or bypass anti-cheat, verification, quotas, or protected content.
-- Even without injection or game-memory access, third-party companion or automation tools may violate game or platform rules and may lead to warnings, restrictions, suspension, or account bans; installation requires explicit acknowledgment of this risk.
-- Keeps one application temporary PNG and deletes it after each attempt; runtime capture state is not restored after a crash.
-- Requires explicit acknowledgement of full-primary-display capture risk before first start.
-- Background image submission, Voice-busy deferral, 90-second expiry, and proactive idle-time topics passed targeted live checks. Webpage structure, account capabilities, fullscreen modes, quotas, and platform policy can still change; full RC and soak acceptance remain separate gates.
+> **OpenGameMate is an independent open-source project and is not affiliated with or endorsed by OpenAI.**
 
-See [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md), and the archived [Phase 0 feasibility report](docs/PHASE0_FEASIBILITY_REPORT.md).
+## Demo
 
-## 使用 / Use
+**Demo coming soon.** The repository does not yet contain a privacy-reviewed recording, so no simulated product footage is shown here.
 
-1. 启动 OpenGameMate。程序只显示主界面，不会自动打开浏览器或截图。
-2. 点击“打开 ChatGPT”，自行登录并启动 Voice。
-3. 回到主界面点击“我已开启 Voice”。
-4. 可选：明确发送一次完整角色设定。
-5. 点击“开始陪玩”，阅读并接受整屏捕获提示。
-6. 使用主界面、托盘或可配置的全局快捷键执行主动截图；可在陪玩控制区按下新的快捷键组合进行修改。
-7. 可在陪玩控制区选择自动截图前的连续空闲等待：10、15、30 或 60 秒；新档位从下一个自动轮次生效。
+Want to help record the real flow? Follow the [20–40 second demo recording guide](docs/DEMO_RECORDING_GUIDE.md).
 
-1. Start OpenGameMate. Only the main window opens; no browser or capture starts automatically.
-2. Click **Open ChatGPT**, sign in yourself, and start Voice.
-3. Return and click **I started Voice**.
-4. Optionally send the full role initialization explicitly.
-5. Click **Start** and accept the full-display privacy warning.
-6. Use the main window, tray, or configurable global hotkey for a manual capture. Press a new key combination in the companion controls to change it.
-7. Choose a 10, 15, 30, or 60-second continuous idle wait for automatic capture. A new selection applies to the next automatic occurrence.
+## Core features
 
-## 构建 / Build
+- Works alongside a ChatGPT Voice conversation that you start and control.
+- Automatically updates the conversation with the latest game screen after a continuous idle period.
+- Defers automatic sending while Voice or the page is busy, helping avoid interruptions.
+- Supports user-triggered screenshots from the app, tray, or a configurable global hotkey.
+- Keeps ChatGPT sign-in in a dedicated WebView2 browser environment.
+- Does not read chat history, replies, cookies, tokens, or voice content.
 
-Requirements: Windows 10 19041 or newer, .NET 8 SDK, and a current Microsoft Edge WebView2 Runtime.
+## Download and quick start
+
+> **v0.1.0 public preview is being prepared.** There is no published GitHub Release or public binary yet.
+
+Check the [Releases page](https://github.com/Remersal/OpenGameMate/releases) for the installer and portable package when they are published. This README will link directly to each real asset after it exists.
+
+Until then, you can [build from source](#build-from-source):
+
+1. Start OpenGameMate. It does not open ChatGPT or capture the screen automatically.
+2. Select **Open ChatGPT**, sign in yourself, and start Voice.
+3. Confirm Voice in OpenGameMate, then start companion mode and accept the primary-display capture notice.
+4. Keep playing and talking. After the selected idle period, OpenGameMate can send the newest screen; you can also trigger a screenshot manually.
+
+## How it works
+
+```text
+You play and talk
+        ↓
+ChatGPT Voice and the page become continuously idle
+        ↓
+OpenGameMate captures the latest primary-display image
+        ↓
+The image and a short prompt are sent to your ChatGPT conversation
+        ↓
+ChatGPT can react to the screen or start a new topic
+```
+
+The idle wait can be set to 10, 15, 30, or 60 seconds (default: 10). Nothing is captured or inserted before the full wait completes. One continuous idle period triggers at most once and is rearmed after activity resumes.
+
+## Privacy and safety
+
+- Sign-in, microphone permission, Voice startup, and companion-mode startup require user participation.
+- Screen capture is limited to the primary display and one temporary PNG, which is removed after the submission attempt.
+- OpenGameMate does not read ChatGPT replies, history, account details, cookies, tokens, full page HTML, microphone audio, or system audio.
+- It does not inject into games, read game memory, simulate global input, or bypass anti-cheat, verification, quotas, or protected content.
+- Third-party companion or automation tools may still conflict with game or platform rules and may lead to warnings, restrictions, suspension, or bans.
+
+Read the complete [Privacy Policy](PRIVACY.md) and [Security Policy](SECURITY.md) before use. The archived [Phase 0 feasibility report](docs/PHASE0_FEASIBILITY_REPORT.md) records the original technical evidence and limitations.
+
+## Known limitations
+
+- Windows 10 version 19041 or newer is required, together with .NET 8 Desktop Runtime and a current Microsoft Edge WebView2 Runtime for packaged builds.
+- Capture currently targets the primary display only. Exclusive fullscreen, protected content, display drivers, and anti-cheat behavior can affect results.
+- ChatGPT page structure, Voice availability, image upload support, account quotas, regional access, and platform policy can change.
+- The built-in page rules are used while maintainer-owned signing trust anchors for remote rule updates are still being prepared.
+- Targeted live checks and user RC acceptance have passed, but public compatibility reports across more systems and games are still needed.
+
+See the [v0.1.0 Release Notes](docs/RELEASE_NOTES_0.1.0.md) and [test plan](docs/V0.1_TEST_PLAN.md) for the detailed evidence boundary.
+
+## Build from source
+
+Requirements: Windows 10 version 19041 or newer, [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0), and a current [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/).
 
 ```powershell
 dotnet restore .\OpenGameMate.sln
 .\scripts\Validate-ReleaseMetadata.ps1
 dotnet build .\OpenGameMate.sln -c Release
 dotnet test .\tests\OpenGameMate.Tests\OpenGameMate.Tests.csproj -c Release --no-build
-```
-
-Run from source:
-
-```powershell
 dotnet run --project .\src\OpenGameMate.App\OpenGameMate.App.csproj -c Release
 ```
 
@@ -67,18 +112,21 @@ Portable data mode:
 OpenGameMate.App.exe --portable
 ```
 
-Installed mode stores operational data under `%LocalAppData%\OpenGameMate\`; portable mode uses `data\` beside the executable. The application does not recursively delete the WebView2 profile; use the in-app cleanup instructions after fully exiting.
+Installed mode stores operational data under `%LocalAppData%\OpenGameMate\`; portable mode uses `data\` beside the executable. See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for development and packaging details.
 
-## 打包 / Packaging
+## Contributing
 
-`scripts\Publish-Portable.ps1` creates a framework-dependent Windows x64 portable folder. Pass a new empty `-OutputDirectory` for every release build. `scripts\Build-Installer.ps1` publishes to that directory and passes its exact path and version to `packaging\OpenGameMate.iss`. Release scripts never clear or reuse a non-empty output folder and never perform recursive deletion.
+Bug reports, compatibility results, documentation fixes, and focused contributions are welcome.
 
-`scripts\Validate-ReleaseMetadata.ps1` checks the shared .NET version, Windows manifest, versioned Release Notes, release-script syntax, forbidden recursive-delete commands, and required Inno macros without creating an artifact.
+- [Open a bug or compatibility report](https://github.com/Remersal/OpenGameMate/issues/new/choose)
+- [Browse existing issues](https://github.com/Remersal/OpenGameMate/issues)
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing code or workflows.
+- Report vulnerabilities using the private process described in [SECURITY.md](SECURITY.md); never post credentials, tokens, chats, or private screenshots publicly.
 
-## 已知限制 / Known limitations
+OpenGameMate is still an early public preview. Feedback, compatibility reports, and contributions are welcome. If you would like to follow its development, consider starring the repository.
 
-- Remote adapter updates are safe-disabled until the project has an official GitHub repository and a maintainer-owned signing public key. Built-in compiled rules remain available.
-- Browser-data one-click recursive deletion is not implemented because repository safety rules prohibit bulk directory deletion; the UI provides the exact manual cleanup procedure.
-- No automated test logs in to a real ChatGPT account, opens Voice, captures the desktop, or sends a real message.
+## License and project status
 
-Licensed under the [MIT License](LICENSE).
+OpenGameMate is available under the [MIT License](LICENSE).
+
+**OpenGameMate is an independent open-source project and is not affiliated with or endorsed by OpenAI.** ChatGPT and OpenAI are trademarks of their respective owners.

@@ -1,44 +1,132 @@
-# OpenGameMate v0.1.0
+[English](README.md)
 
-OpenGameMate 是一个开源 Windows 桌面学习项目。它在应用主窗口内嵌的独立 WebView2 环境中打开 ChatGPT，由用户自行登录并开启 Voice。用户明确开始陪玩后，程序仅在 ChatGPT 网页音频停止、页面持续安全空闲达到所选的 10、15、30 或 60 秒时，捕获最新主显示器画面并提交简短提示。
+<p align="center">
+  <img src="assets/OpenGameMate.AppIcon.png" width="128" alt="OpenGameMate 图标">
+</p>
 
-OpenGameMate 是独立的开源项目，与 OpenAI 无隶属关系，也未获得 OpenAI 的认可或背书。
+<h1 align="center">OpenGameMate</h1>
 
-## 安全与隐私
+<p align="center"><strong>让 ChatGPT Voice 看着你玩游戏，并像连麦网友一样陪你聊天。</strong></p>
 
-- 不读取 ChatGPT 回复、聊天记录、账号、Cookie、Token、完整 HTML 或音频。
-- 不注入游戏、不读取游戏内存、不模拟全局键鼠，也不绕过反作弊、验证码、额度或其他保护措施。
-- 截图仅临时保存于应用专用位置，并在每次提交尝试结束后删除。
-- 首次开始陪玩前，用户必须确认捕获整个主显示器可能带来的隐私风险。
-- 第三方陪玩或自动化工具可能违反游戏或平台规则，并可能导致警告、限制或封禁账号；请自行确认相关规则并承担使用风险。
+<p align="center">
+  <a href="https://github.com/Remersal/OpenGameMate/actions/workflows/ci.yml"><img src="https://github.com/Remersal/OpenGameMate/actions/workflows/ci.yml/badge.svg" alt="CI 构建"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/Remersal/OpenGameMate" alt="MIT License"></a>
+  <img src="https://img.shields.io/badge/platform-Windows-0078D4?logo=windows11&amp;logoColor=white" alt="Windows">
+  <img src="https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&amp;logoColor=white" alt=".NET 8">
+</p>
 
-详细说明请参阅 [PRIVACY.md](PRIVACY.md)、[SECURITY.md](SECURITY.md) 和 [Phase 0 可行性报告](docs/PHASE0_FEASIBILITY_REPORT.md)。
+<p align="center">
+  <a href="https://github.com/Remersal/OpenGameMate/releases"><strong>下载</strong></a> ·
+  <a href="#实际效果与演示"><strong>演示</strong></a> ·
+  <a href="docs/RELEASE_NOTES_0.1.0.md"><strong>文档</strong></a> ·
+  <a href="README.md"><strong>English</strong></a>
+</p>
 
-## 使用方法
+<p align="center">
+  OpenGameMate 是一款开源 Windows 桌面应用，使用你自行登录的 ChatGPT 网页和 Voice，不需要开发者 API Key。<br>
+  对话持续空闲后，它会发送最新游戏画面，让 AI 根据画面接话、吐槽或自然地主动开启话题。<br>
+  登录、Voice、屏幕捕获以及陪玩模式的启动与停止始终由你控制。
+</p>
 
-1. 启动 OpenGameMate。程序不会自动打开浏览器或捕获屏幕。
+> **OpenGameMate is an independent open-source project and is not affiliated with or endorsed by OpenAI.**
+
+## 实际效果与演示
+
+**Demo coming soon。** 仓库目前还没有经过隐私检查的真实录屏，因此这里不会放置模拟演示、假界面或空白占位图。
+
+如果你愿意帮助录制真实流程，请按照 [20～40 秒演示录制指南](docs/DEMO_RECORDING_GUIDE.md) 操作。
+
+## 核心功能
+
+- 配合由你启动和控制的 ChatGPT Voice 对话使用。
+- 对话持续空闲后，自动用最新游戏画面更新对话。
+- Voice 或网页繁忙时延后自动发送，尽量避免打断。
+- 支持从主界面、托盘或可配置的全局快捷键手动截图。
+- 使用独立的 WebView2 登录环境打开 ChatGPT。
+- 不读取聊天记录、模型回复、Cookie、Token 或语音内容。
+
+## 下载与快速开始
+
+> **v0.1.0 public preview is being prepared。** 当前还没有已发布的 GitHub Release 或公开二进制文件。
+
+安装版与便携版发布后会出现在 [Releases 页面](https://github.com/Remersal/OpenGameMate/releases)，README 也会在真实文件存在后添加对应直链。
+
+现阶段可以先[从源码构建](#从源码构建)：
+
+1. 启动 OpenGameMate。程序不会自动打开 ChatGPT，也不会自动截图。
 2. 点击“打开 ChatGPT”，自行登录并开启 Voice。
-3. 返回主界面，确认 Voice 已开启。
-4. 可选：明确发送一次完整角色设定。
-5. 点击“开始陪玩”，阅读并接受整屏捕获提示。
-6. 使用主界面、托盘或可配置的全局快捷键主动截图。
-7. 在陪玩控制区选择自动截图前的连续空闲等待时间：10、15、30 或 60 秒。
+3. 回到 OpenGameMate 确认 Voice 已开启，然后启动陪玩模式并接受主显示器捕获提示。
+4. 继续玩游戏和聊天。达到所选空闲时间后，OpenGameMate 可以发送最新画面；你也可以随时手动截图。
+
+## 工作原理
+
+```text
+你正常玩游戏并与 AI 聊天
+        ↓
+ChatGPT Voice 和网页进入持续空闲状态
+        ↓
+OpenGameMate 捕获最新主显示器画面
+        ↓
+图片和一段简短提示被发送到你的 ChatGPT 对话
+        ↓
+ChatGPT 根据画面接话或主动开启新话题
+```
+
+空闲等待可选 10、15、30 或 60 秒，默认 10 秒。完整等待结束前不会截图或操作输入区域；同一连续空闲段最多触发一次，恢复活动后才会重新计时。
+
+## 隐私与安全
+
+- 登录、麦克风授权、Voice 启动和陪玩模式启动都需要用户主动参与。
+- 只捕获主显示器，并仅使用一个临时 PNG；提交尝试结束后会删除该文件。
+- 不读取 ChatGPT 回复、历史、账号资料、Cookie、Token、完整网页 HTML、麦克风音频或系统音频。
+- 不注入游戏、不读取游戏内存、不模拟全局输入，也不绕过反作弊、验证、额度或受保护内容。
+- 第三方陪玩或自动化工具仍可能与游戏或平台规则冲突，并可能导致警告、限制、暂封或封禁。
+
+使用前请阅读完整的 [隐私说明](PRIVACY.md) 和 [安全策略](SECURITY.md)。归档的 [Phase 0 可行性报告](docs/PHASE0_FEASIBILITY_REPORT.md) 保留了早期技术证据与限制。
+
+## 已知限制
+
+- 需要 Windows 10 19041 或更高版本；打包版本还需要 .NET 8 Desktop Runtime 和较新的 Microsoft Edge WebView2 Runtime。
+- 当前只捕获主显示器；独占全屏、受保护内容、显示驱动和反作弊行为可能影响结果。
+- ChatGPT 网页结构、Voice 与图片上传能力、账号额度、地区可用性和平台政策都可能变化。
+- 远程规则更新仍在等待维护者签名信任锚，当前使用内置网页规则。
+- 定向真实测试和用户 RC 验收已经通过，但仍需要收集更多系统与游戏的公开兼容性报告。
+
+详细证据边界请参阅 [v0.1.0 Release Notes](docs/RELEASE_NOTES_0.1.0.md) 和 [测试计划](docs/V0.1_TEST_PLAN.md)。
 
 ## 从源码构建
 
-要求：Windows 10 19041 或更高版本、.NET 8 SDK，以及最新的 Microsoft Edge WebView2 Runtime。
+要求：Windows 10 19041 或更高版本、[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)，以及较新的 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。
 
 ```powershell
 dotnet restore .\OpenGameMate.sln
 .\scripts\Validate-ReleaseMetadata.ps1
 dotnet build .\OpenGameMate.sln -c Release
 dotnet test .\tests\OpenGameMate.Tests\OpenGameMate.Tests.csproj -c Release --no-build
-```
-
-从源码运行：
-
-```powershell
 dotnet run --project .\src\OpenGameMate.App\OpenGameMate.App.csproj -c Release
 ```
 
-更多构建、打包和已知限制请参阅英文版 [README.md](README.md)。项目采用 [MIT License](LICENSE)。
+便携数据模式：
+
+```powershell
+OpenGameMate.App.exe --portable
+```
+
+安装模式把运行数据保存在 `%LocalAppData%\OpenGameMate\`；便携模式使用可执行文件旁的 `data\`。开发与打包细节请参阅 [CONTRIBUTING.md](CONTRIBUTING.md) 和 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
+## 贡献方式
+
+欢迎提交 Bug、兼容性结果、文档修正和范围明确的贡献。
+
+- [提交 Bug 或兼容性报告](https://github.com/Remersal/OpenGameMate/issues/new/choose)
+- [查看已有 Issues](https://github.com/Remersal/OpenGameMate/issues)
+- 修改代码或工作流前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- 安全漏洞请按照 [SECURITY.md](SECURITY.md) 的私密流程报告；不要在公开 Issue 中提交凭据、Token、聊天内容或私人截图。
+
+OpenGameMate 目前仍是早期公开测试版，欢迎提交兼容性反馈、Issue 和贡献。如果你希望继续关注项目，可以点一个 Star。
+
+## License 与非官方声明
+
+OpenGameMate 使用 [MIT License](LICENSE)。
+
+**OpenGameMate is an independent open-source project and is not affiliated with or endorsed by OpenAI.** ChatGPT 与 OpenAI 是其各自所有者的商标。

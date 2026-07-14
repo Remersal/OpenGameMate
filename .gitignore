@@ -36,6 +36,7 @@ portable/
 *.jpg
 *.jpeg
 !assets/OpenGameMate.AppIcon.png
+!assets/social-preview.png
 
 # Machine-local settings and credentials
 .env

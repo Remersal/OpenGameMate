@@ -60,7 +60,7 @@ Capture errors expose stable codes for unsupported systems, missing primary disp
 
 Adapter rules are strict JSON containing only version tokens and length-bounded CSS selectors. Remote documents use a strict signed envelope: the base64 payload is verified byte-for-byte with RSA-PSS/SHA-256 before its strict schema and allowlisted fields are accepted. The downloader limits the document and payload sizes, requires HTTPS on the default port, and pins the exact `raw.githubusercontent.com/<official-owner>/<official-repository>/main/adapter-rules/chatgpt-v1.signed.json` path, including the final URI after redirects. Every rejection falls back to built-in rules.
 
-The repository currently has no declared official GitHub remote or maintainer-owned signing public key. Until maintainers provide those trust anchors, product composition must pass no verifier; the loader then returns `RemoteDisabled` without making a network request and uses built-in rules. A signing key must never be generated or stored in the client repository.
+The official GitHub repository now exists, but the runtime still has no maintainer-owned signing public key or configured remote-rule trust anchors. Until maintainers provide those trust anchors, product composition must pass no verifier; the loader then returns `RemoteDisabled` without making a network request and uses built-in rules. A signing private key must never be generated or stored in the client repository.
 
 ## WPF composition boundary
 

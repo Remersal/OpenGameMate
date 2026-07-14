@@ -22,7 +22,7 @@ This source revision implements the v0.1.0 Early Preview architecture and produc
 
 - Install, launch, upgrade/replace, uninstall, and residue checks for the generated installer on clean supported Windows environments.
 - Authenticode signing before broad public distribution; the locally generated preview installer is currently unsigned.
-- Publication of signed remote adapter rules after an official GitHub source and maintainer-owned verification public key are available.
+- Publication of signed remote adapter rules after a maintainer-owned verification public key is published and the runtime trust anchors are configured for this repository.
 - Exception-matrix observations not explicitly supplied with the final user RC confirmation remain documented test targets during public testing; they are not recorded as passing without evidence.
 
 The recorded user evidence is in [USER_RC_CHECKLIST_0.1.0.md](USER_RC_CHECKLIST_0.1.0.md). The source revision is ready for public testing with the limitations below; this status is not a claim that every installation environment, ChatGPT page revision, account quota, or exception path has been validated.
@@ -43,7 +43,7 @@ The recorded user evidence is in [USER_RC_CHECKLIST_0.1.0.md](USER_RC_CHECKLIST_
 
 ## Release limitations
 
-- Remote adapter downloads are disabled until the official GitHub source and maintainer-owned public verification key exist.
+- Remote adapter downloads are disabled until a maintainer-owned public verification key is published and configured for this repository.
 - Recursive one-click deletion of the WebView2 profile is omitted under repository safety rules; the UI provides manual cleanup instructions.
 - The portable package is framework-dependent and requires .NET 8 Desktop Runtime and WebView2 Runtime.
 - A local Inno Setup 6 installer executable has been generated; it remains an unsigned preview artifact until maintainer-owned Authenticode signing is configured.
