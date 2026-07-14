@@ -1,8 +1,8 @@
 # OpenGameMate v0.1.0
 
-OpenGameMate 是一个开源 Windows 桌面学习项目：它在主窗口内嵌的独立 WebView2 环境中打开 ChatGPT，由用户自行登录和开启 Voice。用户明确开始后，程序在 30 秒后进行首次自动尝试，之后每两分钟尝试更新一次画面；只有当前 ChatGPT 页面和 WebView2 音频持续安全空闲时，才捕获最新主显示器画面并提交简短提示。
+OpenGameMate 是一个开源 Windows 桌面学习项目：它在主窗口内嵌的独立 WebView2 环境中打开 ChatGPT，由用户自行登录和开启 Voice。用户明确开始后，只有在 ChatGPT 网页音频停止且页面连续安全空闲约 10 秒时，程序才捕获最新主显示器画面并提交简短提示；同一空闲段只触发一次，恢复交谈后重新计时。
 
-OpenGameMate is an open-source Windows desktop learning project. It opens ChatGPT in an isolated WebView2 session under the user's control. After the user explicitly starts companion mode, the first automatic primary-display capture is attempted after 30 seconds and later attempts occur every two minutes. A fresh image and short prompt are submitted only after the current ChatGPT page and WebView2 audio remain safely idle.
+OpenGameMate is an open-source Windows desktop learning project. It opens ChatGPT in an isolated WebView2 session under the user's control. After the user explicitly starts companion mode, a fresh primary-display image and short prompt are submitted only after ChatGPT web audio stops and the page remains safely idle for about 10 seconds. A continuous idle window triggers only once and is rearmed after conversation activity resumes.
 
 OpenGameMate is not an OpenAI product, official extension, or unlimited-quota tool.
 
@@ -29,14 +29,14 @@ See [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md), and the archived [Phas
 3. 回到主界面点击“我已开启 Voice”。
 4. 可选：明确发送一次完整角色设定。
 5. 点击“开始陪玩”，阅读并接受整屏捕获提示。
-6. 使用主界面或托盘执行立即发送、暂停、恢复和停止。
+6. 使用主界面、托盘或可配置的全局快捷键执行主动截图；可在陪玩控制区按下新的快捷键组合进行修改。
 
 1. Start OpenGameMate. Only the main window opens; no browser or capture starts automatically.
 2. Click **Open ChatGPT**, sign in yourself, and start Voice.
 3. Return and click **I started Voice**.
 4. Optionally send the full role initialization explicitly.
 5. Click **Start** and accept the full-display privacy warning.
-6. Use the main window or tray for send-now, pause, resume, and stop.
+6. Use the main window, tray, or configurable global hotkey for a manual capture. Press a new key combination in the companion controls to change it.
 
 ## 构建 / Build
 

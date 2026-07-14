@@ -10,8 +10,8 @@ public enum PendingSendObservation
 public sealed class AutomaticPendingSend
 {
     public static readonly TimeSpan MaximumDeferral = TimeSpan.FromSeconds(90);
-    public static readonly TimeSpan MinimumAudioSilence = TimeSpan.FromSeconds(3);
-    public static readonly TimeSpan RequiredIdleStability = TimeSpan.FromSeconds(6);
+    public static readonly TimeSpan MinimumAudioSilence = RuntimePolicy.ConversationIdleCaptureDelay;
+    public static readonly TimeSpan RequiredIdleStability = RuntimePolicy.ConversationIdleCaptureDelay;
 
     public AutomaticPendingSend(DateTimeOffset scheduledAt, DateTimeOffset pendingCreatedAt)
     {

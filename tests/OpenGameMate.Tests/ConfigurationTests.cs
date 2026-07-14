@@ -31,7 +31,8 @@ public sealed class ConfigurationTests
             {
                 Language = AppLanguage.ChineseSimplified,
                 CheckRemoteAdapterRules = false,
-                ShowPrivacyWarningOnFirstStart = false
+                ShowPrivacyWarningOnFirstStart = false,
+                ManualCaptureHotKey = "Ctrl+Shift+F9",
             };
 
             await store.SaveAsync(expected);
@@ -45,6 +46,34 @@ public sealed class ConfigurationTests
             DeleteSingleFile(settingsFile + ".tmp");
             DeleteEmptyDirectory(testDirectory);
         }
+    }
+
+    [Theory]
+    [InlineData("Ctrl+Alt+F10", "Ctrl+Alt+F10")]
+    [InlineData("shift+control+k", "Ctrl+Shift+K")]
+    [InlineData("Win+1", "Win+1")]
+    public void ManualCaptureHotKey_NormalizesSupportedGestures(string value, string expected)
+    {
+        Assert.Equal(expected, ManualCaptureHotKey.Parse(value).DisplayText);
+    }
+
+    [Theory]
+    [InlineData("F10")]
+    [InlineData("Ctrl")]
+    [InlineData("Ctrl+F13")]
+    [InlineData("Ctrl+Space")]
+    [InlineData("Ctrl+Ctrl+K")]
+    public void ManualCaptureHotKey_RejectsUnsafeOrAmbiguousGestures(string value)
+    {
+        Assert.False(ManualCaptureHotKey.TryParse(value, out _));
+    }
+
+    [Fact]
+    public void Settings_RejectInvalidManualCaptureHotKey()
+    {
+        var settings = new OpenGameMateSettings { ManualCaptureHotKey = "F10" };
+
+        Assert.Throws<ConfigurationValidationException>(() => settings.Validate());
     }
 
     [Fact]

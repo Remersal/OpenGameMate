@@ -101,16 +101,15 @@ public sealed class SchedulingTests
     }
 
     [Fact]
-    public void AutomaticLoop_UsesTheFixedRuntimeInterval()
+    public void AutomaticLoop_UsesTheConversationIdlePollInterval()
     {
         var loop = new AutomaticSendLoop();
 
-        Assert.Equal(TimeSpan.FromSeconds(30), loop.InitialDelay);
-        Assert.Equal(TimeSpan.FromMinutes(2), loop.Interval);
+        Assert.Equal(TimeSpan.FromMilliseconds(250), loop.PollInterval);
     }
 
     [Fact]
-    public async Task AutomaticLoop_FiresFirstAtThirtySecondsThenTwoMinutesLater()
+    public async Task AutomaticLoop_OpensOnlyOnceDuringAContinuousIdleWindow()
     {
         var startedAt = new DateTimeOffset(2026, 7, 14, 10, 0, 0, TimeSpan.Zero);
         var timeProvider = new ManualTimeProvider(startedAt);
@@ -119,11 +118,48 @@ public sealed class SchedulingTests
         var occurrences = new List<DateTimeOffset>();
         var firstOccurrence = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var loopTask = loop.RunAsync(
+            () => true,
+            _ => Task.FromResult(true),
+            (scheduledAt, _) =>
+            {
+                occurrences.Add(scheduledAt);
+                firstOccurrence.TrySetResult();
+                return Task.CompletedTask;
+            },
+            cancellation.Token);
+
+        await firstOccurrence.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal([startedAt], occurrences);
+
+        await WaitForTimerAsync(timeProvider);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(250));
+        await WaitForTimerAsync(timeProvider);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(250));
+        Assert.Single(occurrences);
+
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => loopTask);
+    }
+
+    [Fact]
+    public async Task AutomaticLoop_RearmsOnlyAfterConversationActivityResumes()
+    {
+        var startedAt = new DateTimeOffset(2026, 7, 14, 10, 0, 0, TimeSpan.Zero);
+        var timeProvider = new ManualTimeProvider(startedAt);
+        var loop = new AutomaticSendLoop(timeProvider);
+        using var cancellation = new CancellationTokenSource();
+        var idle = true;
+        var occurrences = new List<DateTimeOffset>();
+        var firstOccurrence = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var secondOccurrence = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         var loopTask = loop.RunAsync(
             () => true,
+            _ => Task.FromResult(idle),
             (scheduledAt, _) =>
             {
                 occurrences.Add(scheduledAt);
@@ -131,7 +167,7 @@ public sealed class SchedulingTests
                 {
                     firstOccurrence.TrySetResult();
                 }
-                else if (occurrences.Count == 2)
+                else
                 {
                     secondOccurrence.TrySetResult();
                     cancellation.Cancel();
@@ -141,28 +177,23 @@ public sealed class SchedulingTests
             },
             cancellation.Token);
 
-        await WaitForTimerAsync(timeProvider);
-        timeProvider.Advance(TimeSpan.FromSeconds(29));
-        Assert.Empty(occurrences);
-
-        timeProvider.Advance(TimeSpan.FromSeconds(1));
         await firstOccurrence.Task.WaitAsync(TimeSpan.FromSeconds(1));
-        Assert.Equal([startedAt.AddSeconds(30)], occurrences);
-
+        idle = false;
         await WaitForTimerAsync(timeProvider);
-        timeProvider.Advance(TimeSpan.FromMinutes(2).Subtract(TimeSpan.FromMilliseconds(1)));
+        timeProvider.Advance(TimeSpan.FromMilliseconds(250));
         Assert.Single(occurrences);
 
-        timeProvider.Advance(TimeSpan.FromMilliseconds(1));
+        idle = true;
+        await WaitForTimerAsync(timeProvider);
+        timeProvider.Advance(TimeSpan.FromMilliseconds(250));
         await secondOccurrence.Task.WaitAsync(TimeSpan.FromSeconds(1));
-        Assert.Equal(
-            [startedAt.AddSeconds(30), startedAt.AddSeconds(30).AddMinutes(2)],
-            occurrences);
+
+        Assert.Equal([startedAt, startedAt.AddMilliseconds(500)], occurrences);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => loopTask);
     }
 
     [Fact]
-    public async Task AutomaticLoop_SkipsPausedInitialOccurrenceWithoutResettingCadence()
+    public async Task AutomaticLoop_DoesNotOpenAWindowWhilePaused()
     {
         var startedAt = new DateTimeOffset(2026, 7, 14, 10, 0, 0, TimeSpan.Zero);
         var timeProvider = new ManualTimeProvider(startedAt);
@@ -175,6 +206,7 @@ public sealed class SchedulingTests
 
         var loopTask = loop.RunAsync(
             () => running,
+            _ => Task.FromResult(true),
             (scheduledAt, _) =>
             {
                 occurrence = scheduledAt;
@@ -185,67 +217,15 @@ public sealed class SchedulingTests
             cancellation.Token);
 
         await WaitForTimerAsync(timeProvider);
-        timeProvider.Advance(TimeSpan.FromSeconds(30));
+        timeProvider.Advance(TimeSpan.FromMilliseconds(250));
         Assert.Null(occurrence);
 
         running = true;
         await WaitForTimerAsync(timeProvider);
-        timeProvider.Advance(TimeSpan.FromMinutes(2));
+        timeProvider.Advance(TimeSpan.FromMilliseconds(250));
         await occurrenceRaised.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
-        Assert.Equal(startedAt.AddSeconds(30).AddMinutes(2), occurrence);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => loopTask);
-    }
-
-    [Fact]
-    public async Task AutomaticLoop_DoesNotCatchUpAfterAnOccurrenceRunsPastTheInterval()
-    {
-        var startedAt = new DateTimeOffset(2026, 7, 14, 10, 0, 0, TimeSpan.Zero);
-        var timeProvider = new ManualTimeProvider(startedAt);
-        var loop = new AutomaticSendLoop(timeProvider);
-        using var cancellation = new CancellationTokenSource();
-        var releaseFirst = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var firstStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var secondStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var occurrences = new List<DateTimeOffset>();
-
-        var loopTask = loop.RunAsync(
-            () => true,
-            async (scheduledAt, _) =>
-            {
-                occurrences.Add(scheduledAt);
-                if (occurrences.Count == 1)
-                {
-                    firstStarted.TrySetResult();
-                    await releaseFirst.Task;
-                }
-                else
-                {
-                    secondStarted.TrySetResult();
-                    cancellation.Cancel();
-                }
-            },
-            cancellation.Token);
-
-        await WaitForTimerAsync(timeProvider);
-        timeProvider.Advance(TimeSpan.FromSeconds(30));
-        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
-
-        timeProvider.Advance(TimeSpan.FromMinutes(10));
-        Assert.Single(occurrences);
-
-        releaseFirst.TrySetResult();
-        await WaitForTimerAsync(timeProvider);
-        Assert.Single(occurrences);
-
-        timeProvider.Advance(TimeSpan.FromMinutes(2));
-        await secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
-        Assert.Equal(
-            [startedAt.AddSeconds(30), startedAt.AddMinutes(12).AddSeconds(30)],
-            occurrences);
+        Assert.Equal(startedAt.AddMilliseconds(500), occurrence);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => loopTask);
     }
 
@@ -278,7 +258,7 @@ public sealed class SchedulingTests
     }
 
     [Fact]
-    public void PendingSend_RequiresSixStableSecondsAndAtLeastThreeSilentSeconds()
+    public void PendingSend_RequiresTenStableAndSilentSeconds()
     {
         var now = DateTimeOffset.Parse("2026-07-14T10:00:00+00:00");
         var pending = new AutomaticPendingSend(now, now);
@@ -289,42 +269,26 @@ public sealed class SchedulingTests
         Assert.Equal(
             PendingSendObservation.Waiting,
             pending.Observe(
-                now.AddMilliseconds(2999),
+                now.AddMilliseconds(9999),
                 pageIdle: true,
                 audioSilent: true,
-                TimeSpan.FromMilliseconds(2999),
+                TimeSpan.FromMilliseconds(9999),
                 "idle-stabilizing"));
         Assert.Equal(
             PendingSendObservation.Waiting,
             pending.Observe(
-                now.AddSeconds(3),
+                now.AddSeconds(10),
                 pageIdle: true,
                 audioSilent: true,
-                TimeSpan.FromSeconds(3),
-                "idle-stabilizing"));
-        Assert.Equal(
-            PendingSendObservation.Waiting,
-            pending.Observe(
-                now.AddMilliseconds(5999),
-                pageIdle: true,
-                audioSilent: true,
-                TimeSpan.FromMilliseconds(5999),
-                "idle-stabilizing"));
-        Assert.Equal(
-            PendingSendObservation.Waiting,
-            pending.Observe(
-                now.AddSeconds(6),
-                pageIdle: true,
-                audioSilent: true,
-                TimeSpan.FromMilliseconds(2999),
+                TimeSpan.FromMilliseconds(9999),
                 "idle-stabilizing"));
         Assert.Equal(
             PendingSendObservation.Ready,
             pending.Observe(
-                now.AddMilliseconds(6001),
+                now.AddMilliseconds(10001),
                 pageIdle: true,
                 audioSilent: true,
-                TimeSpan.FromSeconds(6),
+                TimeSpan.FromSeconds(10),
                 "idle-stabilizing"));
     }
 

@@ -1,40 +1,51 @@
 namespace OpenGameMate.Core;
 
 /// <summary>
-/// Emits one initial automatic occurrence after thirty seconds, then fixed
-/// two-minute occurrences. Skipped or failed occurrences are not retried.
+/// Opens one automatic-send window when the observable ChatGPT page first
+/// becomes idle. The window remains latched until page or WebView audio
+/// activity resumes, so a continuous idle period cannot create a backlog.
+/// The pending-send gate owns the ten-second stability delay and performs no
+/// capture or composer mutation before that delay has elapsed.
 /// </summary>
 public sealed class AutomaticSendLoop(TimeProvider? timeProvider = null)
 {
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
-    public TimeSpan InitialDelay => RuntimePolicy.InitialAutomaticCaptureDelay;
-
-    public TimeSpan Interval => RuntimePolicy.AutomaticCaptureInterval;
+    public TimeSpan PollInterval => RuntimePolicy.ConversationIdlePollInterval;
 
     public async Task RunAsync(
         Func<bool> shouldRun,
-        Func<DateTimeOffset, CancellationToken, Task> onAutomaticOccurrence,
+        Func<CancellationToken, Task<bool>> isConversationIdle,
+        Func<DateTimeOffset, CancellationToken, Task> onIdleWindowOpened,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(shouldRun);
-        ArgumentNullException.ThrowIfNull(onAutomaticOccurrence);
+        ArgumentNullException.ThrowIfNull(isConversationIdle);
+        ArgumentNullException.ThrowIfNull(onIdleWindowOpened);
 
-        await Task.Delay(InitialDelay, _timeProvider, cancellationToken);
-        if (shouldRun())
-        {
-            await onAutomaticOccurrence(_timeProvider.GetUtcNow(), cancellationToken);
-        }
-
+        var armed = true;
         while (true)
         {
-            await Task.Delay(Interval, _timeProvider, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!shouldRun())
             {
+                armed = true;
+                await Task.Delay(PollInterval, _timeProvider, cancellationToken);
                 continue;
             }
 
-            await onAutomaticOccurrence(_timeProvider.GetUtcNow(), cancellationToken);
+            var idle = await isConversationIdle(cancellationToken);
+            if (!idle)
+            {
+                armed = true;
+            }
+            else if (armed)
+            {
+                armed = false;
+                await onIdleWindowOpened(_timeProvider.GetUtcNow(), cancellationToken);
+            }
+
+            await Task.Delay(PollInterval, _timeProvider, cancellationToken);
         }
     }
 }

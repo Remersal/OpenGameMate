@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using Microsoft.Web.WebView2.Wpf;
 using Microsoft.Win32;
 using OpenGameMate.Adapters;
@@ -45,6 +46,7 @@ public partial class MainWindow : Window
     private IAiWebAdapter? _adapter;
     private ConversationReminderTracker? _reminderTracker;
     private TrayIconController? _trayIcon;
+    private GlobalHotKeyManager? _globalHotKeyManager;
     private CancellationTokenSource? _runCancellation;
     private Task? _automaticLoopTask;
     private long? _automaticReadyAudioVersion;
@@ -54,6 +56,7 @@ public partial class MainWindow : Window
     private bool _isExiting;
     private bool _browserInitializing;
     private bool _auxiliaryOperation;
+    private bool _capturingHotKey;
 
     public MainWindow(AppDataPaths paths)
     {
@@ -107,6 +110,7 @@ public partial class MainWindow : Window
         SelectLanguageItem(_settings.Language);
         ApplyLocalization();
         CreateTrayIcon();
+        InitializeGlobalHotKey();
         _loaded = true;
         UpdateUi();
         AddActivity(T("应用已启动；不会自动打开浏览器或捕获桌面。", "Started without opening a browser or capturing the desktop."));
@@ -123,6 +127,51 @@ public partial class MainWindow : Window
             () => OnUi(PauseOrResume),
             () => OnUi(StopRun),
             () => OnUi(ExitApplication));
+    }
+
+    private void InitializeGlobalHotKey()
+    {
+        try
+        {
+            _globalHotKeyManager = new GlobalHotKeyManager(this);
+            _globalHotKeyManager.Pressed += GlobalHotKeyManager_Pressed;
+            var hotKey = ManualCaptureHotKey.Parse(_settings.ManualCaptureHotKey);
+            if (!_globalHotKeyManager.TrySet(hotKey, out var errorCode))
+            {
+                AddActivity(T(
+                    $"主动截图快捷键 {hotKey.DisplayText} 注册失败，请更换组合。",
+                    $"Could not register {hotKey.DisplayText}; choose another capture hotkey."));
+                _ = SafeLogAsync(
+                    "hotkey.register-failed",
+                    DiagnosticLevel.Warning,
+                    errorCode: $"win32-{errorCode}");
+            }
+        }
+        catch (Exception exception)
+        {
+            _ = ReportExceptionAsync("hotkey.initialize-failed", "hotkey-initialize", exception);
+        }
+    }
+
+    private void GlobalHotKeyManager_Pressed(object? sender, EventArgs e) =>
+        OnUi(async () => await HandleManualCaptureHotKeyAsync());
+
+    private async Task HandleManualCaptureHotKeyAsync()
+    {
+        if (_capturingHotKey)
+        {
+            return;
+        }
+
+        if (_stateMachine.State != GameMateState.Running)
+        {
+            AddActivity(T(
+                "主动截图快捷键仅在陪玩运行时生效。",
+                "The capture hotkey is active only while companion mode is running."));
+            return;
+        }
+
+        await SendNowAsync();
     }
 
     private async void LanguageComboBox_SelectionChanged(
@@ -159,6 +208,137 @@ public partial class MainWindow : Window
             }
         }
     }
+
+    private void ChangeHotKeyButton_Click(object sender, RoutedEventArgs e)
+    {
+        _capturingHotKey = true;
+        ApplyLocalization();
+        HotKeyTextBox.Focus();
+        Keyboard.Focus(HotKeyTextBox);
+    }
+
+    private async void HotKeyTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (!_capturingHotKey)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key == Key.Escape)
+        {
+            _capturingHotKey = false;
+            ApplyLocalization();
+            return;
+        }
+
+        if (IsModifierKey(key))
+        {
+            return;
+        }
+
+        if (!TryCreateHotKey(key, Keyboard.Modifiers, out var hotKey))
+        {
+            AddActivity(T(
+                "快捷键必须包含 Ctrl、Alt、Shift 或 Win，并使用 A-Z、0-9 或 F1-F12。",
+                "Use Ctrl, Alt, Shift, or Win with an A-Z, 0-9, or F1-F12 key."));
+            return;
+        }
+
+        await ChangeManualCaptureHotKeyAsync(hotKey);
+    }
+
+    private async Task ChangeManualCaptureHotKeyAsync(ManualCaptureHotKey hotKey)
+    {
+        if (_globalHotKeyManager is null)
+        {
+            AddActivity(T("全局快捷键尚未就绪。", "The global hotkey service is not ready."));
+            return;
+        }
+
+        var previousSettings = _settings;
+        var previousHotKey = ManualCaptureHotKey.Parse(previousSettings.ManualCaptureHotKey);
+        if (!_globalHotKeyManager.TrySet(hotKey, out var errorCode))
+        {
+            AddActivity(T(
+                $"快捷键 {hotKey.DisplayText} 已被占用或无法注册，仍使用 {previousHotKey.DisplayText}。",
+                $"{hotKey.DisplayText} is unavailable; {previousHotKey.DisplayText} remains active."));
+            await SafeLogAsync(
+                "hotkey.register-failed",
+                DiagnosticLevel.Warning,
+                errorCode: $"win32-{errorCode}");
+            return;
+        }
+
+        _settings = _settings with { ManualCaptureHotKey = hotKey.DisplayText };
+        try
+        {
+            await _settingsStore.SaveAsync(_settings);
+            _capturingHotKey = false;
+            AddActivity(T(
+                $"主动截图快捷键已改为 {hotKey.DisplayText}。",
+                $"The capture hotkey is now {hotKey.DisplayText}."));
+            await SafeLogAsync("hotkey.updated", DiagnosticLevel.Information, success: true);
+        }
+        catch (Exception exception)
+        {
+            _ = _globalHotKeyManager.TrySet(previousHotKey, out _);
+            _settings = previousSettings;
+            await ReportExceptionAsync("settings.save-failed", "hotkey-settings-save", exception);
+        }
+        finally
+        {
+            ApplyLocalization();
+            UpdateUi();
+        }
+    }
+
+    private static bool TryCreateHotKey(
+        Key key,
+        ModifierKeys keyboardModifiers,
+        out ManualCaptureHotKey hotKey)
+    {
+        hotKey = null!;
+        var modifiers = HotKeyModifiers.None;
+        if (keyboardModifiers.HasFlag(ModifierKeys.Control))
+        {
+            modifiers |= HotKeyModifiers.Control;
+        }
+
+        if (keyboardModifiers.HasFlag(ModifierKeys.Alt))
+        {
+            modifiers |= HotKeyModifiers.Alt;
+        }
+
+        if (keyboardModifiers.HasFlag(ModifierKeys.Shift))
+        {
+            modifiers |= HotKeyModifiers.Shift;
+        }
+
+        if (keyboardModifiers.HasFlag(ModifierKeys.Windows))
+        {
+            modifiers |= HotKeyModifiers.Windows;
+        }
+
+        string? keyName = key switch
+        {
+            >= Key.A and <= Key.Z => key.ToString(),
+            >= Key.D0 and <= Key.D9 => ((int)key - (int)Key.D0).ToString(CultureInfo.InvariantCulture),
+            >= Key.F1 and <= Key.F12 => key.ToString(),
+            _ => null,
+        };
+        return keyName is not null &&
+               ManualCaptureHotKey.TryParse(
+                   new ManualCaptureHotKey(modifiers, keyName).DisplayText,
+                   out hotKey);
+    }
+
+    private static bool IsModifierKey(Key key) => key is
+        Key.LeftCtrl or Key.RightCtrl or
+        Key.LeftAlt or Key.RightAlt or
+        Key.LeftShift or Key.RightShift or
+        Key.LWin or Key.RWin;
 
     private void ApplyLocalization()
     {
@@ -198,10 +378,17 @@ public partial class MainWindow : Window
             : T("尚未记录角色初始化。", "Role initialization has not been recorded.");
         RunGroup.Header = T("3. 陪玩控制", "3. Companion controls");
         RunInstructionText.Text = T(
-            "开始 30 秒后首次自动发送，之后每 2 分钟一次。手动发送不重置计时，普通失败不立即重试。",
-            "The first automatic send occurs after 30 seconds, then every two minutes. Manual sends do not reset timing; ordinary failures are not retried immediately.");
+            "ChatGPT 网页音频停止且页面空闲稳定约 10 秒后，才截图并自动发送。",
+            "A screenshot is captured and sent only after ChatGPT web audio stops and the page remains idle for about 10 seconds.");
         StartButton.Content = T("开始陪玩", "Start");
         SendNowButton.Content = T("立即发送", "Send now");
+        HotKeyLabelText.Text = T("主动截图快捷键", "Capture hotkey");
+        ChangeHotKeyButton.Content = _capturingHotKey
+            ? T("请按组合键", "Press keys")
+            : T("更改", "Change");
+        HotKeyTextBox.Text = _capturingHotKey
+            ? T("按下新快捷键，Esc 取消", "Press a new hotkey; Esc cancels")
+            : ManualCaptureHotKey.Parse(_settings.ManualCaptureHotKey).DisplayText;
         StopButton.Content = T("停止", "Stop");
         MaintenanceGroup.Header = T("4. 数据、规则与诊断", "4. Data, rules, and diagnostics");
         RetryAdapterButton.Content = T("重新检查内置规则", "Retry built-in rules");
@@ -542,8 +729,8 @@ public partial class MainWindow : Window
         var result = MessageBox.Show(
             this,
             T(
-                "OpenGameMate 将在开始 30 秒后首次捕获整个主显示器，之后每 2 分钟捕获并发送到当前 ChatGPT 对话。画面可能包含通知、聊天、账号名或其他私人内容。请先关闭敏感窗口。独占全屏、受保护内容和反作弊环境可能黑屏或失败，程序不会绕过保护。\n\n是否理解风险并开始？",
-                "OpenGameMate will first capture the entire primary display 30 seconds after starting, then capture and send it every two minutes to the current ChatGPT chat. Notifications, chats, account names, or other private content may be included. Close sensitive windows first. Exclusive fullscreen, protected content, and anti-cheat environments may fail or produce black frames; protections are not bypassed.\n\nDo you understand the risk and want to start?"),
+                "OpenGameMate 会在 ChatGPT 网页音频停止且页面空闲连续稳定约 10 秒后，才捕获整个主显示器并发送到当前对话。画面可能包含通知、聊天、账号名或其他私人内容。请先关闭敏感窗口。独占全屏、受保护内容和反作弊环境可能黑屏或失败，程序不会绕过保护。\n\n是否理解风险并开始？",
+                "OpenGameMate captures the entire primary display only after ChatGPT web audio stops and the page remains idle for about 10 seconds, then sends it to the current chat. Notifications, chats, account names, or other private content may be included. Close sensitive windows first. Exclusive fullscreen, protected content, and anti-cheat environments may fail or produce black frames; protections are not bypassed.\n\nDo you understand the risk and want to start?"),
             T("整屏捕获隐私确认", "Full-display capture privacy confirmation"),
             MessageBoxButton.YesNo,
             MessageBoxImage.Warning);
@@ -583,8 +770,8 @@ public partial class MainWindow : Window
         _runCancellation = new CancellationTokenSource();
         _automaticLoopTask = RunAutomaticLoopAsync(_runCancellation.Token);
         AddActivity(T(
-            "陪玩已开始；第一次自动发送将在 30 秒后，之后每 2 分钟一次。",
-            "Companion mode started; the first automatic send is in 30 seconds, then every two minutes."));
+            "陪玩已开始；网页音频停止且页面空闲稳定 10 秒后自动发送。",
+            "Companion mode started; automatic capture waits for 10 seconds of stable page and web-audio silence."));
         _ = SafeLogAsync("run.started", DiagnosticLevel.Information, success: true);
         UpdateUi();
     }
@@ -595,6 +782,7 @@ public partial class MainWindow : Window
         {
             await _automaticSendLoop.RunAsync(
                 () => _stateMachine.State == GameMateState.Running,
+                ObserveConversationIdleAsync,
                 ProcessAutomaticOccurrenceAsync,
                 cancellationToken);
         }
@@ -605,6 +793,46 @@ public partial class MainWindow : Window
         {
             await ReportExceptionAsync("scheduler.failed", "scheduler", exception);
         }
+    }
+
+    private async Task<bool> ObserveConversationIdleAsync(CancellationToken cancellationToken)
+    {
+        if (_stateMachine.State != GameMateState.Running ||
+            _browserSession is null ||
+            _adapter is null)
+        {
+            return false;
+        }
+
+        var audio = _browserSession.GetAudioSnapshot(DateTimeOffset.UtcNow);
+        if (!audio.IsKnown || audio.IsPlaying)
+        {
+            return false;
+        }
+
+        var probe = await _adapter.ProbeIdleAsync(cancellationToken);
+        if (probe.Status != WebAdapterStatus.AdapterInvalid)
+        {
+            return probe.IsSafeToPrepare;
+        }
+
+        await SafeLogAsync(
+            "scheduler.adapter-invalid",
+            DiagnosticLevel.Warning,
+            errorCode: probe.Code,
+            adapterDiagnostics: probe.Diagnostics,
+            audioState: ToWebAudioState(audio),
+            audioSilentDurationMs: (long)audio.SilentDuration.TotalMilliseconds);
+        if (_stateMachine.State == GameMateState.Running)
+        {
+            ApplyTrigger(GameMateTrigger.AdapterInvalid);
+            AddActivity(T(
+                "网页适配失效；空闲检测已停止且不会操作输入区域。",
+                "The webpage adapter failed; idle detection stopped without touching the composer."));
+            _runCancellation?.Cancel();
+        }
+
+        return false;
     }
 
     private async Task ProcessAutomaticOccurrenceAsync(
@@ -1258,12 +1486,12 @@ public partial class MainWindow : Window
         if (_stateMachine.State == GameMateState.Running)
         {
             ApplyTrigger(GameMateTrigger.Pause);
-            AddActivity(T("已暂停；固定计时继续，暂停期间到期事件会跳过。", "Paused; fixed timing continues and occurrences are skipped."));
+            AddActivity(T("已暂停；不会累计空闲时间。", "Paused; idle time is not accumulated."));
         }
         else if (_stateMachine.State == GameMateState.Paused)
         {
             ApplyTrigger(GameMateTrigger.Resume);
-            AddActivity(T("已恢复；等待下一个固定周期。", "Resumed; waiting for the next fixed occurrence."));
+            AddActivity(T("已恢复；重新等待连续 10 秒空闲。", "Resumed; waiting for a fresh 10-second idle window."));
         }
 
         UpdateUi();
@@ -1441,10 +1669,10 @@ public partial class MainWindow : Window
         GameMateState.BrowserReady => T("浏览器已就绪；请登录、开启 Voice 并确认。", "Browser ready; sign in, start Voice, and confirm."),
         GameMateState.Ready => T("Voice 已确认；可发送角色设定或开始陪玩。", "Voice confirmed; initialize the role or start."),
         GameMateState.Running => T(
-            "正在运行；首轮 30 秒，之后每 2 分钟自动发送。",
-            "Running; first send after 30 seconds, then every two minutes."),
+            "正在运行；网页音频停止且页面空闲稳定 10 秒后自动发送。",
+            "Running; automatic capture waits for 10 seconds of stable page and web-audio silence."),
         GameMateState.Sending => T("正在处理一张截图；不会并发或排队。", "Processing one screenshot; no concurrency or queue."),
-        GameMateState.Paused => T("已暂停；到期事件会跳过。", "Paused; due occurrences are skipped."),
+        GameMateState.Paused => T("已暂停；恢复后重新等待 10 秒空闲。", "Paused; a fresh 10-second idle window is required after resuming."),
         GameMateState.VoiceOnly => T("图片额度受限；保持纯语音，不再自动发送。", "Image quota limited; Voice-only mode, no more automatic sends."),
         GameMateState.AdapterError => T("网页适配失效；已停止发送。", "Web adapter failed; sending is stopped."),
         GameMateState.Stopped => T("已停止；若要重新开始，请再次确认 Voice。", "Stopped; confirm Voice again to restart."),
@@ -1591,5 +1819,7 @@ public partial class MainWindow : Window
         }
         _trayIcon?.Dispose();
         _trayIcon = null;
+        _globalHotKeyManager?.Dispose();
+        _globalHotKeyManager = null;
     }
 }

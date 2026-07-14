@@ -27,8 +27,9 @@ The detailed, fillable user procedure is [USER_RC_CHECKLIST_0.1.0.md](USER_RC_CH
 - Installed and portable data modes.
 - User-controlled sign-in, microphone permission, Voice confirmation, and optional role initialization.
 - Primary-display capture at no more than 1920×1080 with temporary-file cleanup.
-- First automatic update attempt after 30 seconds, then a fresh two-minute delay after each later occurrence; send-now, pause/resume, stop, tray controls, and one browser recovery.
-- Capacity-one PendingSend with no screenshot backlog: busy conversations defer for at most 90 seconds, then expire without catch-up.
+- Conversation-idle automatic updates: capture and composer work begin only after ChatGPT web audio stops and the page remains safely idle for 10 continuous seconds; each idle window triggers at most once.
+- Configurable global manual-capture hotkey with strict modifier/key validation and conflict-safe preservation of the previous binding.
+- Capacity-one PendingSend with no screenshot backlog: unstable conversations defer for at most 90 seconds, then expire without catch-up.
 - WebView2 document-audio, exact Voice/page-state stabilization, and a second fail-closed pre-submit check before the newest primary-display capture is sent.
 - Proactive idle-time image prompts that ask ChatGPT Voice to start one natural, brief topic from the latest screen.
 - Fail-closed page adapter, quota/adapter degradation states, conversation reminders, WebView2 process-failure logging, and structured diagnostics export.
@@ -40,5 +41,5 @@ The detailed, fillable user procedure is [USER_RC_CHECKLIST_0.1.0.md](USER_RC_CH
 - Recursive one-click deletion of the WebView2 profile is omitted under repository safety rules; the UI provides manual cleanup instructions.
 - The portable package is framework-dependent and requires .NET 8 Desktop Runtime and WebView2 Runtime.
 - The installer definition is present, but an installer executable can only be produced on a machine with Inno Setup 6.
-- Targeted user-controlled live checks passed for sign-in, microphone permission, image attachment/submission, a 30-second first occurrence, later two-minute occurrences, Voice-busy deferral, a 90-second busy expiry, foreground/mouse stability, and a proactive Voice response after an idle-time image.
+- Targeted user-controlled live checks passed for sign-in, microphone permission, image attachment/submission, Voice-busy deferral, a 90-second busy expiry, foreground/mouse stability, and a proactive Voice response after an idle-time image. The new 10-second idle-window trigger and configurable global hotkey still require user RC confirmation.
 - The 30-minute and two-hour user RC soak runs have not been completed. This targeted evidence must not be interpreted as long-duration stability approval or a public-release decision.

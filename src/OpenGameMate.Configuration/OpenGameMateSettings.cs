@@ -26,6 +26,9 @@ public sealed record OpenGameMateSettings
 
     public bool RolePromptSent { get; init; }
 
+    public string ManualCaptureHotKey { get; init; } =
+        global::OpenGameMate.Configuration.ManualCaptureHotKey.DefaultGesture;
+
     public void Validate()
     {
         if (SchemaVersion != CurrentSchemaVersion)
@@ -38,6 +41,8 @@ public sealed record OpenGameMateSettings
         {
             throw new ConfigurationValidationException("Unsupported application language.");
         }
+
+        _ = global::OpenGameMate.Configuration.ManualCaptureHotKey.Parse(ManualCaptureHotKey);
     }
 }
 

@@ -268,7 +268,7 @@
                                            FontSize="12"
                                            LineHeight="18"
                                            TextWrapping="Wrap"
-                                           Text="开始 30 秒后首次自动发送，之后每 2 分钟尝试一次。" />
+                                           Text="网页音频停止且页面空闲稳定约 10 秒后自动发送。" />
                                 <WrapPanel Margin="0,8,0,0">
                                     <Button x:Name="StartButton"
                                             Margin="0,0,7,7"
@@ -288,6 +288,33 @@
                                             Click="StopButton_Click"
                                             Content="停止" />
                                 </WrapPanel>
+                                <Grid Margin="0,1,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="HotKeyLabelText"
+                                               Margin="0,0,8,0"
+                                               VerticalAlignment="Center"
+                                               Foreground="{StaticResource SecondaryTextBrush}"
+                                               FontSize="12"
+                                               Text="主动截图快捷键" />
+                                    <TextBox x:Name="HotKeyTextBox"
+                                             Grid.Column="1"
+                                             MinWidth="105"
+                                             Height="30"
+                                             Padding="8,4"
+                                             VerticalContentAlignment="Center"
+                                             IsReadOnly="True"
+                                             PreviewKeyDown="HotKeyTextBox_PreviewKeyDown" />
+                                    <Button x:Name="ChangeHotKeyButton"
+                                            Grid.Column="2"
+                                            Margin="7,0,0,0"
+                                            Padding="10,5"
+                                            Click="ChangeHotKeyButton_Click"
+                                            Content="更改" />
+                                </Grid>
                                 <TextBlock x:Name="RunStatusText"
                                            Margin="0,1,0,0"
                                            Foreground="{StaticResource SecondaryTextBrush}"

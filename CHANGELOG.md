@@ -5,7 +5,8 @@
 - Added modular .NET 8 WPF solution with Core, Configuration, Diagnostics, Browser, Capture, Adapters, and App modules.
 - Added isolated WebView2 profile, controlled top-level navigation, user-mediated microphone permission, and one automatic browser recovery.
 - Added primary-display capture bounded to 1920×1080 with one temporary PNG lifecycle.
-- Added a first automatic attempt after 30 seconds followed by two-minute update attempts, manual priority, one active submission, no immediate retries, and conversation reminders.
+- Added conversation-idle automatic capture: ChatGPT web audio and the safe page state must remain stable for 10 seconds before capture or composer work begins; one continuous idle window triggers once and rearms only after activity resumes.
+- Added a configurable global manual-capture hotkey with strict gesture validation, persistent settings, no-repeat registration, and conflict-safe rollback.
 - Added a capacity-one PendingSend gate: busy conversations are deferred for at most 90 seconds, expired occurrences are skipped without catch-up, and the newest screen is captured only when submission is actually safe to prepare.
 - Added WebView2 document-audio and exact page-state stabilization, Voice activity detection outside the composer form, and a full second fail-closed check before submit.
 - Added proactive automatic prompts that ask ChatGPT Voice to start one natural, brief topic from the newest game screen instead of producing a mechanical image report.
