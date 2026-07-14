@@ -34,6 +34,8 @@ public sealed class ChatGptBrowserSession : IDisposable
 
     public event EventHandler<string>? StatusChanged;
 
+    public event EventHandler<CoreWebView2ProcessFailedEventArgs>? ProcessFailed;
+
     public bool IsInitialized => _webView.CoreWebView2 is not null;
 
     public CoreWebView2 Core => _webView.CoreWebView2
@@ -187,8 +189,11 @@ public sealed class ChatGptBrowserSession : IDisposable
         }
     }
 
-    private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs args) =>
+    private void OnProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs args)
+    {
         RaiseStatus($"WebView2 process failure: {args.ProcessFailedKind}");
+        ProcessFailed?.Invoke(this, args);
+    }
 
     public void Dispose()
     {
@@ -209,6 +214,7 @@ public sealed class ChatGptBrowserSession : IDisposable
         }
 
         StatusChanged = null;
+        ProcessFailed = null;
     }
 
     private void RaiseStatus(string message) => StatusChanged?.Invoke(this, message);

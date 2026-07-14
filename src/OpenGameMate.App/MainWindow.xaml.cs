@@ -227,6 +227,7 @@ public partial class MainWindow : Window
                 PromptForMicrophoneAsync,
                 FindBrowserRuntime());
             _browserSession.StatusChanged += BrowserSession_StatusChanged;
+            _browserSession.ProcessFailed += BrowserSession_ProcessFailed;
             await _browserSession.InitializeAsync();
             _adapter = new ChatGptWebAdapter(_browserSession, ChatGptAdapterRules.BuiltIn);
 
@@ -287,6 +288,17 @@ public partial class MainWindow : Window
     private void BrowserSession_StatusChanged(object? sender, string message) =>
         Dispatcher.Invoke(() => AddActivity(message));
 
+    private async void BrowserSession_ProcessFailed(
+        object? sender,
+        Microsoft.Web.WebView2.Core.CoreWebView2ProcessFailedEventArgs args)
+    {
+        await SafeLogAsync(
+            "webview.process-failed",
+            DiagnosticLevel.Error,
+            errorCode: args.ProcessFailedKind.ToString(),
+            success: false);
+    }
+
     private void BrowserWindow_Closing(object? sender, CancelEventArgs e) => _browserSession?.Dispose();
 
     private void BrowserWindow_Closed(object? sender, EventArgs e)
@@ -303,6 +315,7 @@ public partial class MainWindow : Window
         if (_browserSession is not null)
         {
             _browserSession.StatusChanged -= BrowserSession_StatusChanged;
+            _browserSession.ProcessFailed -= BrowserSession_ProcessFailed;
             _browserSession.Dispose();
         }
 
@@ -424,6 +437,7 @@ public partial class MainWindow : Window
             }
 
             var submission = await _adapter.SubmitAsync();
+            await LogAdapterDiagnosticsAsync(submission);
             if (submission.Status != WebAdapterStatus.Succeeded ||
                 !submission.TriggerInvoked ||
                 !(submission.ComposerCleared || submission.AttachmentCleared))
@@ -664,6 +678,7 @@ public partial class MainWindow : Window
         }
 
         var submission = await _adapter.SubmitAsync(cancellationToken);
+        await LogAdapterDiagnosticsAsync(submission);
         if (submission.Status != WebAdapterStatus.Succeeded ||
             !submission.TriggerInvoked ||
             !(submission.ComposerCleared || submission.AttachmentCleared))
@@ -947,7 +962,8 @@ public partial class MainWindow : Window
         int? imageWidth = null,
         int? imageHeight = null,
         long? fileSizeBytes = null,
-        string? exceptionType = null)
+        string? exceptionType = null,
+        AdapterDiagnostics? adapterDiagnostics = null)
     {
         try
         {
@@ -961,12 +977,23 @@ public partial class MainWindow : Window
                 imageWidth,
                 imageHeight,
                 fileSizeBytes,
-                exceptionType));
+                exceptionType,
+                adapterDiagnostics));
         }
         catch
         {
         }
     }
+
+    private Task LogAdapterDiagnosticsAsync(SubmissionResult submission) =>
+        SafeLogAsync(
+            "adapter.submit-probe",
+            submission.Status == WebAdapterStatus.Succeeded
+                ? DiagnosticLevel.Information
+                : DiagnosticLevel.Warning,
+            errorCode: submission.Code,
+            success: submission.Status == WebAdapterStatus.Succeeded,
+            adapterDiagnostics: submission.Diagnostics);
 
     private async Task ReportExceptionAsync(string eventName, string errorCode, Exception exception)
     {

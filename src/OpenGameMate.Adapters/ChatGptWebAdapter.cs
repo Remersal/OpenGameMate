@@ -19,9 +19,20 @@ public interface IAiWebAdapter
     Task<SubmissionResult> SubmitAsync(CancellationToken cancellationToken = default);
 }
 
+public enum SubmitControlDecision
+{
+    Invoke,
+    Wait,
+    Fail,
+}
+
 public sealed class ChatGptWebAdapter : IAiWebAdapter
 {
     private const string FileInputMarker = "data-opengamemate-file";
+    private const int MaximumDiagnosticButtonCandidates = 12;
+    private const int MaximumDiagnosticScopeDepth = 8;
+    private const int SubmitControlPollAttempts = 120;
+    private const int SubmitControlPollIntervalMilliseconds = 250;
     private const int MaximumMessageCharacters = 8000;
     private const long MaximumImageBytes = 20 * 1024 * 1024;
     private readonly ChatGptBrowserSession _session;
@@ -286,7 +297,17 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             exception is InvalidOperationException or JsonException or IOException or
                 UnauthorizedAccessException or COMException)
         {
-            return new(false, false, false, "adapter-operation-failed", WebAdapterStatus.AdapterInvalid);
+            return new(
+                false,
+                false,
+                false,
+                "adapter-operation-failed",
+                WebAdapterStatus.AdapterInvalid,
+                new AdapterDiagnostics(
+                    AdapterPageState.Unknown,
+                    0,
+                    [],
+                    AdapterFailureStage.RuntimeEvaluation));
         }
     }
 
@@ -294,31 +315,217 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
     {
         if (!_session.IsInitialized || !_session.IsOnChatGpt())
         {
-            return new(false, false, false, "not-on-chatgpt", WebAdapterStatus.NotReady);
+            return new(
+                false,
+                false,
+                false,
+                "not-on-chatgpt",
+                WebAdapterStatus.NotReady,
+                new AdapterDiagnostics(
+                    AdapterPageState.Unknown,
+                    0,
+                    [],
+                    AdapterFailureStage.Readiness));
         }
 
         var sendButtonSelectorJson = JsonSerializer.Serialize(_rules.SendButtonSelector);
+        var busyButtonSelectorJson = JsonSerializer.Serialize(_rules.BusyButtonSelector);
         var composerSelectorJson = JsonSerializer.Serialize(_rules.ComposerSelector);
         var quotaSelectorsJson = JsonSerializer.Serialize(_rules.QuotaErrorSelectors);
         var platformErrorSelectorsJson = JsonSerializer.Serialize(_rules.PlatformErrorSelectors);
+        var attachmentPreviewSelectorsJson = JsonSerializer.Serialize(_rules.AttachmentPreviewSelectors);
 
-        var submitResult = await EvaluateAsync(
-            $$"""
+        var adapterDiagnostics = new AdapterDiagnostics(
+            AdapterPageState.Unknown,
+            0,
+            [],
+            AdapterFailureStage.Readiness);
+        var triggerInvoked = false;
+        var submitCode = "send-control-timeout";
+        for (var attempt = 0; attempt < SubmitControlPollAttempts; attempt++)
+        {
+            var controlResult = await EvaluateAsync(
+                $$"""
             (() => {
-              const buttons = [...document.querySelectorAll({{sendButtonSelectorJson}})];
-              if (buttons.length !== 1) return { code: 'send-button-count', count: buttons.length, invoked: false };
-              const button = buttons[0];
-              if (button.disabled || button.getAttribute('aria-disabled') === 'true') {
-                return { code: 'send-button-disabled', invoked: false };
+              const emptyDiagnostics = failureStage => ({
+                pageState: 'Unknown', detectedButtonCount: 0,
+                candidateButtons: [], failureStage
+              });
+              if (!(location.hostname === 'chatgpt.com' || location.hostname.endsWith('.chatgpt.com'))) {
+                return { code: 'unexpected-origin',
+                  sendButtonCount: 0, sendDisabled: false, busyButtonCount: 0,
+                  diagnostics: emptyDiagnostics('Readiness') };
               }
-              button.click();
-              return { code: 'ok', invoked: true };
+
+              const composers = [...document.querySelectorAll({{composerSelectorJson}})]
+                .filter(element => !element.hasAttribute('disabled'));
+              if (composers.length !== 1) {
+                return { code: 'composer-count-before-submit',
+                  sendButtonCount: 0, sendDisabled: false, busyButtonCount: 0,
+                  diagnostics: emptyDiagnostics('ComposerScope') };
+              }
+
+              const composer = composers[0];
+              const scope = composer.closest('form');
+              if (!scope) {
+                return { code: 'composer-form-missing',
+                  sendButtonCount: 0, sendDisabled: false, busyButtonCount: 0,
+                  diagnostics: emptyDiagnostics('ComposerScope') };
+              }
+
+              const attachmentSelectors = {{attachmentPreviewSelectorsJson}};
+              const hasAttachment = attachmentSelectors.some(selector => scope.querySelector(selector)) ||
+                Boolean(scope.querySelector('img[src^="blob:"]'));
+              const distanceFromScope = element => {
+                const scopeAncestors = new Map();
+                let current = scope;
+                let distance = 0;
+                while (current && distance <= {{MaximumDiagnosticScopeDepth}}) {
+                  scopeAncestors.set(current, distance++);
+                  current = current.parentElement;
+                }
+                current = element;
+                distance = 0;
+                while (current && distance <= {{MaximumDiagnosticScopeDepth}}) {
+                  if (scopeAncestors.has(current)) return distance + scopeAncestors.get(current);
+                  current = current.parentElement;
+                  distance++;
+                }
+                return {{MaximumDiagnosticScopeDepth + 1}};
+              };
+              const allButtons = [...scope.querySelectorAll('button')];
+              const discoveredButtons = allButtons.map(button => ({ button, scopeDepth: 0 }));
+              const seenButtons = new Set(allButtons);
+              for (const button of document.querySelectorAll(
+                {{busyButtonSelectorJson}} + ',' + {{sendButtonSelectorJson}})) {
+                const scopeDepth = distanceFromScope(button);
+                if (scopeDepth <= {{MaximumDiagnosticScopeDepth}} && !seenButtons.has(button)) {
+                  seenButtons.add(button);
+                  discoveredButtons.push({ button, scopeDepth });
+                }
+              }
+              const busyButtons = [...document.querySelectorAll({{busyButtonSelectorJson}})]
+                .filter(button => distanceFromScope(button) <= {{MaximumDiagnosticScopeDepth}});
+              const hasVoiceControl = busyButtons.length === 1 || Boolean(scope.querySelector(
+                'button[data-testid="voice-mode-button"],button[data-testid="end-voice-mode-button"],' +
+                '[data-testid="voice-mode-composer"]'));
+              const pageState = hasVoiceControl
+                ? (hasAttachment ? 'VoiceComposerWithAttachment' : 'VoiceComposer')
+                : (hasAttachment ? 'ComposerWithAttachment' : 'Composer');
+              const candidateButtons = discoveredButtons
+                .slice(0, {{MaximumDiagnosticButtonCandidates}})
+                .map(({ button, scopeDepth }) => ({
+                  tagName: button.tagName.toLowerCase(),
+                  scopeDepth,
+                  type: button.getAttribute('type'),
+                  role: button.getAttribute('role'),
+                  disabled: Boolean(button.disabled),
+                  ariaDisabled: button.getAttribute('aria-disabled') === 'true',
+                  ariaLabel: button.getAttribute('aria-label'),
+                  dataTestId: button.getAttribute('data-testid')
+                }));
+              const diagnostics = failureStage => ({
+                pageState,
+                detectedButtonCount: discoveredButtons.length,
+                candidateButtons,
+                failureStage
+              });
+              const buttons = allButtons.filter(button => button.matches({{sendButtonSelectorJson}}));
+              const sendDisabled = buttons.length === 1 &&
+                (buttons[0].disabled || buttons[0].getAttribute('aria-disabled') === 'true');
+              return {
+                code: 'ok',
+                sendButtonCount: buttons.length,
+                sendDisabled,
+                busyButtonCount: busyButtons.length,
+                diagnostics: diagnostics('None')
+              };
             })()
             """);
 
-        if (!GetBoolean(submitResult, "invoked"))
-        {
-            return new(false, false, false, GetCode(submitResult), WebAdapterStatus.AdapterInvalid);
+            adapterDiagnostics = ParseAdapterDiagnostics(controlResult);
+            var sendButtonCount = GetInt32(controlResult, "sendButtonCount");
+            var busyButtonCount = GetInt32(controlResult, "busyButtonCount");
+            var decision = DetermineSubmitControlDecision(
+                sendButtonCount,
+                GetBoolean(controlResult, "sendDisabled"),
+                busyButtonCount);
+            if (GetCode(controlResult) != "ok")
+            {
+                return new(
+                    false,
+                    false,
+                    false,
+                    GetCode(controlResult),
+                    WebAdapterStatus.AdapterInvalid,
+                    adapterDiagnostics);
+            }
+
+            if (decision == SubmitControlDecision.Fail)
+            {
+                var failureStage = sendButtonCount > 1 || busyButtonCount > 1
+                    ? AdapterFailureStage.ButtonValidation
+                    : AdapterFailureStage.ButtonDiscovery;
+                return new(
+                    false,
+                    false,
+                    false,
+                    "send-control-ambiguous",
+                    WebAdapterStatus.AdapterInvalid,
+                    adapterDiagnostics with { FailureStage = failureStage });
+            }
+
+            if (decision == SubmitControlDecision.Invoke)
+            {
+                var invokeResult = await EvaluateAsync(
+                    $$"""
+                    (() => {
+                      const composers = [...document.querySelectorAll({{composerSelectorJson}})]
+                        .filter(element => !element.hasAttribute('disabled'));
+                      if (composers.length !== 1) return { code: 'composer-count-before-invoke', invoked: false };
+                      const scope = composers[0].closest('form');
+                      if (!scope) return { code: 'composer-form-missing-before-invoke', invoked: false };
+                      const busyButtons = [...document.querySelectorAll({{busyButtonSelectorJson}})];
+                      const buttons = [...scope.querySelectorAll({{sendButtonSelectorJson}})];
+                      if (busyButtons.length !== 0 || buttons.length !== 1) {
+                        return { code: 'send-control-changed-before-invoke', invoked: false };
+                      }
+                      const button = buttons[0];
+                      if (button.disabled || button.getAttribute('aria-disabled') === 'true') {
+                        return { code: 'send-button-disabled-before-invoke', invoked: false };
+                      }
+                      button.click();
+                      return { code: 'ok', invoked: true };
+                    })()
+                    """);
+                triggerInvoked = GetBoolean(invokeResult, "invoked");
+                submitCode = GetCode(invokeResult);
+                if (!triggerInvoked)
+                {
+                    return new(
+                        false,
+                        false,
+                        false,
+                        submitCode,
+                        WebAdapterStatus.AdapterInvalid,
+                        adapterDiagnostics with { FailureStage = AdapterFailureStage.Invocation });
+                }
+
+                break;
+            }
+
+            if (attempt == SubmitControlPollAttempts - 1)
+            {
+                return new(
+                    false,
+                    false,
+                    false,
+                    submitCode,
+                    WebAdapterStatus.AdapterInvalid,
+                    adapterDiagnostics with { FailureStage = AdapterFailureStage.ButtonValidation });
+            }
+
+            await Task.Delay(SubmitControlPollIntervalMilliseconds, cancellationToken);
         }
 
         await Task.Delay(1000, cancellationToken);
@@ -362,11 +569,14 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         };
 
         return new(
-            true,
+            triggerInvoked,
             composerCleared,
             attachmentCleared,
             code,
-            status);
+            status,
+            status == WebAdapterStatus.Succeeded
+                ? adapterDiagnostics
+                : adapterDiagnostics with { FailureStage = AdapterFailureStage.PostSubmitObservation });
     }
 
     private async Task<JsonElement> EvaluateAsync(string expression)
@@ -450,10 +660,77 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             : WebAdapterStatus.AdapterInvalid;
     }
 
+    public static SubmitControlDecision DetermineSubmitControlDecision(
+        int sendButtonCount,
+        bool sendButtonDisabled,
+        int busyButtonCount)
+    {
+        if (sendButtonCount is < 0 or > 1 || busyButtonCount is < 0 or > 1)
+        {
+            return SubmitControlDecision.Fail;
+        }
+
+        if (busyButtonCount == 1 || (sendButtonCount == 1 && sendButtonDisabled))
+        {
+            return SubmitControlDecision.Wait;
+        }
+
+        return sendButtonCount == 1
+            ? SubmitControlDecision.Invoke
+            : SubmitControlDecision.Fail;
+    }
+
     public static JsonElement ParseRuntimeEvaluateResponse(string responseJson)
     {
         using var response = JsonDocument.Parse(responseJson);
         return ParseRuntimeEvaluateResponse(response.RootElement);
+    }
+
+    public static AdapterDiagnostics ParseAdapterDiagnostics(JsonElement submitResult)
+    {
+        if (!submitResult.TryGetProperty("diagnostics", out var diagnostics) ||
+            diagnostics.ValueKind != JsonValueKind.Object)
+        {
+            return new(
+                AdapterPageState.Unknown,
+                0,
+                [],
+                AdapterFailureStage.RuntimeEvaluation);
+        }
+
+        var pageState = TryReadEnum(diagnostics, "pageState", AdapterPageState.Unknown);
+        var failureStage = TryReadEnum(
+            diagnostics,
+            "failureStage",
+            AdapterFailureStage.RuntimeEvaluation);
+        var detectedButtonCount = diagnostics.TryGetProperty("detectedButtonCount", out var count) &&
+            count.TryGetInt32(out var parsedCount) && parsedCount >= 0
+                ? parsedCount
+                : 0;
+        var candidates = new List<AdapterButtonCandidate>();
+        if (diagnostics.TryGetProperty("candidateButtons", out var candidateArray) &&
+            candidateArray.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var candidate in candidateArray.EnumerateArray().Take(MaximumDiagnosticButtonCandidates))
+            {
+                if (candidate.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                candidates.Add(new AdapterButtonCandidate(
+                    ReadBoundedString(candidate, "tagName", 32) ?? "button",
+                    ReadBoundedInteger(candidate, "scopeDepth", 0, 32),
+                    ReadBoundedString(candidate, "type", 32),
+                    ReadBoundedString(candidate, "role", 32),
+                    GetBoolean(candidate, "disabled"),
+                    GetBoolean(candidate, "ariaDisabled"),
+                    ReadBoundedString(candidate, "ariaLabel", 120, allowLocalizedText: true),
+                    ReadBoundedString(candidate, "dataTestId", 120)));
+            }
+        }
+
+        return new(pageState, detectedButtonCount, candidates, failureStage);
     }
 
     private static JsonElement ParseRuntimeEvaluateResponse(JsonElement response)
@@ -487,4 +764,52 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
 
     private static bool GetBoolean(JsonElement element, string propertyName) =>
         element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.True;
+
+    private static int GetInt32(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var value) && value.TryGetInt32(out var result)
+            ? result
+            : -1;
+
+    private static TEnum TryReadEnum<TEnum>(JsonElement element, string propertyName, TEnum fallback)
+        where TEnum : struct, Enum =>
+        element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String &&
+        Enum.TryParse<TEnum>(value.GetString(), ignoreCase: false, out var parsed)
+            ? parsed
+            : fallback;
+
+    private static string? ReadBoundedString(
+        JsonElement element,
+        string propertyName,
+        int maximumLength,
+        bool allowLocalizedText = false)
+    {
+        if (!element.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        var result = value.GetString();
+        if (string.IsNullOrWhiteSpace(result) || result.Length > maximumLength || result.Any(char.IsControl))
+        {
+            return null;
+        }
+
+        if (!allowLocalizedText && result.Any(
+                character => !char.IsAsciiLetterOrDigit(character) && character is not '.' and not '_' and not '-'))
+        {
+            return null;
+        }
+
+        return result;
+    }
+
+    private static int ReadBoundedInteger(
+        JsonElement element,
+        string propertyName,
+        int minimum,
+        int maximum) =>
+        element.TryGetProperty(propertyName, out var value) &&
+        value.TryGetInt32(out var result) && result >= minimum && result <= maximum
+            ? result
+            : minimum;
 }

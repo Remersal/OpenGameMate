@@ -18,6 +18,43 @@ public enum WebAdapterStatus
     PlatformError,
 }
 
+public enum AdapterPageState
+{
+    Unknown,
+    Composer,
+    ComposerWithAttachment,
+    VoiceComposer,
+    VoiceComposerWithAttachment,
+}
+
+public enum AdapterFailureStage
+{
+    None,
+    Readiness,
+    ComposerScope,
+    ButtonDiscovery,
+    ButtonValidation,
+    Invocation,
+    PostSubmitObservation,
+    RuntimeEvaluation,
+}
+
+public sealed record AdapterButtonCandidate(
+    string TagName,
+    int ScopeDepth,
+    string? Type,
+    string? Role,
+    bool Disabled,
+    bool AriaDisabled,
+    string? AriaLabel,
+    string? DataTestId);
+
+public sealed record AdapterDiagnostics(
+    AdapterPageState PageState,
+    int DetectedButtonCount,
+    IReadOnlyList<AdapterButtonCandidate> CandidateButtons,
+    AdapterFailureStage FailureStage);
+
 public sealed record InputPreparationResult(
     bool FileInputSelected,
     bool AttachmentPreviewDetected,
@@ -38,7 +75,8 @@ public sealed record SubmissionResult(
     bool ComposerCleared,
     bool AttachmentCleared,
     string Code,
-    WebAdapterStatus Status);
+    WebAdapterStatus Status,
+    AdapterDiagnostics? Diagnostics = null);
 
 public sealed record FocusSnapshot(
     long ForegroundWindow,

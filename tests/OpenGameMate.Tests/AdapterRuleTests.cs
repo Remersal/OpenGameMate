@@ -18,6 +18,7 @@ public sealed class AdapterRuleTests
         Assert.Equal(ChatGptAdapterRules.CurrentSchemaVersion, rules.SchemaVersion);
         Assert.NotEmpty(rules.ComposerSelector);
         Assert.NotEmpty(rules.SendButtonSelector);
+        Assert.Equal("button[data-testid=\"stop-button\"]", rules.BusyButtonSelector);
         Assert.DoesNotContain("function", JsonSerializer.Serialize(rules), StringComparison.OrdinalIgnoreCase);
     }
 

@@ -12,10 +12,11 @@ public sealed record ChatGptAdapterRules
     public static ChatGptAdapterRules BuiltIn { get; } = new()
     {
         SchemaVersion = CurrentSchemaVersion,
-        RulesVersion = "builtin-2026.07.14",
+        RulesVersion = "builtin-2026.07.14-p0-1",
         ComposerSelector = "#prompt-textarea",
         FileInputSelector = "input[type=\"file\"]",
         SendButtonSelector = "button[data-testid=\"send-button\"]",
+        BusyButtonSelector = "button[data-testid=\"stop-button\"]",
         AttachmentPreviewSelectors =
         [
             "[data-testid=\"file-thumbnail\"]",
@@ -48,6 +49,8 @@ public sealed record ChatGptAdapterRules
 
     public required string SendButtonSelector { get; init; }
 
+    public required string BusyButtonSelector { get; init; }
+
     public required string[] AttachmentPreviewSelectors { get; init; }
 
     public required string[] QuotaErrorSelectors { get; init; }
@@ -65,9 +68,11 @@ public sealed record ChatGptAdapterRules
         ValidateSelector(ComposerSelector, nameof(ComposerSelector));
         ValidateSelector(FileInputSelector, nameof(FileInputSelector));
         ValidateSelector(SendButtonSelector, nameof(SendButtonSelector));
+        ValidateSelector(BusyButtonSelector, nameof(BusyButtonSelector));
         RequireAnySelectorToken(ComposerSelector, nameof(ComposerSelector), "prompt", "composer");
         RequireAllSelectorTokens(FileInputSelector, nameof(FileInputSelector), "input", "file");
         RequireAllSelectorTokens(SendButtonSelector, nameof(SendButtonSelector), "button", "send");
+        RequireAllSelectorTokens(BusyButtonSelector, nameof(BusyButtonSelector), "button", "stop");
         ValidateSelectorArray(AttachmentPreviewSelectors, nameof(AttachmentPreviewSelectors));
         ValidateSelectorArray(QuotaErrorSelectors, nameof(QuotaErrorSelectors));
         ValidateSelectorArray(PlatformErrorSelectors, nameof(PlatformErrorSelectors));

@@ -168,6 +168,65 @@ public class Phase0UnitTests
     }
 
     [Theory]
+    [InlineData(1, false, 0, OpenGameMate.Adapters.SubmitControlDecision.Invoke)]
+    [InlineData(1, true, 0, OpenGameMate.Adapters.SubmitControlDecision.Wait)]
+    [InlineData(0, false, 1, OpenGameMate.Adapters.SubmitControlDecision.Wait)]
+    [InlineData(1, false, 1, OpenGameMate.Adapters.SubmitControlDecision.Wait)]
+    [InlineData(0, false, 0, OpenGameMate.Adapters.SubmitControlDecision.Fail)]
+    [InlineData(2, false, 0, OpenGameMate.Adapters.SubmitControlDecision.Fail)]
+    [InlineData(1, false, 2, OpenGameMate.Adapters.SubmitControlDecision.Fail)]
+    public void SubmitControlDecision_OnlyInvokesOneEnabledSendButtonWhenVoiceIsIdle(
+        int sendButtonCount,
+        bool sendButtonDisabled,
+        int busyButtonCount,
+        OpenGameMate.Adapters.SubmitControlDecision expected)
+    {
+        Assert.Equal(
+            expected,
+            OpenGameMate.Adapters.ChatGptWebAdapter.DetermineSubmitControlDecision(
+                sendButtonCount,
+                sendButtonDisabled,
+                busyButtonCount));
+    }
+
+    [Fact]
+    public void AdapterDiagnosticsParser_ReadsOnlyBoundedControlMetadata()
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(
+            """
+            {
+              "diagnostics": {
+                "pageState": "VoiceComposerWithAttachment",
+                "detectedButtonCount": 2,
+                "candidateButtons": [
+                  {
+                    "tagName": "button",
+                    "scopeDepth": 0,
+                    "type": "button",
+                    "disabled": true,
+                    "ariaDisabled": false,
+                    "ariaLabel": "发送提示",
+                    "dataTestId": "send-button"
+                  }
+                ],
+                "failureStage": "ButtonValidation"
+              }
+            }
+            """);
+
+        var diagnostics = OpenGameMate.Adapters.ChatGptWebAdapter.ParseAdapterDiagnostics(
+            document.RootElement);
+
+        Assert.Equal(OpenGameMate.Core.AdapterPageState.VoiceComposerWithAttachment, diagnostics.PageState);
+        Assert.Equal(2, diagnostics.DetectedButtonCount);
+        var candidate = Assert.Single(diagnostics.CandidateButtons);
+        Assert.True(candidate.Disabled);
+        Assert.Equal("发送提示", candidate.AriaLabel);
+        Assert.Equal("send-button", candidate.DataTestId);
+        Assert.Equal(OpenGameMate.Core.AdapterFailureStage.ButtonValidation, diagnostics.FailureStage);
+    }
+
+    [Theory]
     [InlineData(3840, 2160, 1920, 1080)]
     [InlineData(2560, 1440, 1920, 1080)]
     [InlineData(3440, 1440, 1920, 804)]
