@@ -126,7 +126,13 @@ foreach ($requiredFragment in @(
     'Name: "chinesesimplified"; MessagesFile: "Languages\ChineseSimplified.isl"',
     'Name: "english"; MessagesFile: "compiler:Default.isl"',
     'Description: "{cm:CreateDesktopIcon}"',
-    'Description: "{cm:LaunchProgram,{#MyAppName}}"'
+    'Description: "{cm:LaunchProgram,{#MyAppName}}"',
+    'english.GameAccountRiskTitle=Game account risk warning',
+    'chinesesimplified.GameAccountRiskTitle=',
+    "GetPreviousData('GameAccountRiskAccepted', '') = '1'",
+    'GameAccountRiskPage := CreateInputOptionPage(',
+    'function PrepareToInstall(var NeedsRestart: Boolean): String;',
+    "SetPreviousData(PreviousDataKey, 'GameAccountRiskAccepted', '1')"
 )) {
     if ($innoDefinition.IndexOf($requiredFragment, [StringComparison]::Ordinal) -lt 0) {
         throw "Inno Setup definition is missing required release macro usage: $requiredFragment"

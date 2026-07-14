@@ -10,12 +10,14 @@ OpenGameMate is not an OpenAI product, official extension, or unlimited-quota to
 
 - 不读取 ChatGPT 回复、聊天记录、账号、Cookie、Token、完整 HTML 或音频。
 - 不注入游戏、不读游戏内存、不模拟全局键鼠、不绕过反作弊、验证码、额度或受保护内容。
+- 即使不注入或读取游戏内存，第三方陪玩或自动化工具仍可能违反游戏或平台规则，并可能导致警告、限制或封禁账号；安装时必须明确确认该风险。
 - 截图只写入一个应用临时 PNG，提交尝试结束后删除；异常重启不恢复截图或运行状态。
 - 首次开始前必须确认“捕获整个主显示器”的隐私风险。
 - 后台图片提交、Voice 忙碌延后、90 秒过期跳过和空闲后主动话题已完成小范围真实验证；网页结构、账号能力、独占全屏、额度和平台政策仍会变化，完整 RC 与长时间稳定性仍需单独验收。
 
 - Does not read ChatGPT replies, history, accounts, cookies, tokens, full HTML, or audio.
 - Does not inject into games, read game memory, synthesize global input, or bypass anti-cheat, verification, quotas, or protected content.
+- Even without injection or game-memory access, third-party companion or automation tools may violate game or platform rules and may lead to warnings, restrictions, suspension, or account bans; installation requires explicit acknowledgment of this risk.
 - Keeps one application temporary PNG and deletes it after each attempt; runtime capture state is not restored after a crash.
 - Requires explicit acknowledgement of full-primary-display capture risk before first start.
 - Background image submission, Voice-busy deferral, 90-second expiry, and proactive idle-time topics passed targeted live checks. Webpage structure, account capabilities, fullscreen modes, quotas, and platform policy can still change; full RC and soak acceptance remain separate gates.
