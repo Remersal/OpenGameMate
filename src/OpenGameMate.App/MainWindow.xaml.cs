@@ -7,6 +7,8 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
+using Microsoft.Web.WebView2.Wpf;
 using Microsoft.Win32;
 using OpenGameMate.Adapters;
 using OpenGameMate.Browser;
@@ -33,13 +35,12 @@ public partial class MainWindow : Window
     private readonly IDiagnosticLogger _logger;
     private readonly IPrimaryDisplayCapture _capture;
     private readonly GameMateStateMachine _stateMachine = new();
-    private readonly BrowserRestartGate _browserRestartGate = new();
     private readonly AutomaticSendLoop _automaticSendLoop = new();
     private readonly AutomaticPendingSendSlot _automaticPendingSendSlot = new();
     private readonly SubmissionCoordinator _submissionCoordinator;
 
     private OpenGameMateSettings _settings = new();
-    private BrowserWindow? _browserWindow;
+    private WebView2? _browserView;
     private ChatGptBrowserSession? _browserSession;
     private IAiWebAdapter? _adapter;
     private ConversationReminderTracker? _reminderTracker;
@@ -51,8 +52,7 @@ public partial class MainWindow : Window
     private AutomaticPendingSend? _dispatchingAutomaticPending;
     private bool _loaded;
     private bool _isExiting;
-    private bool _expectedBrowserClose;
-    private bool _resumeAfterBrowserRecovery;
+    private bool _browserInitializing;
     private bool _auxiliaryOperation;
 
     public MainWindow(AppDataPaths paths)
@@ -117,8 +117,8 @@ public partial class MainWindow : Window
     {
         _trayIcon = new TrayIconController(
             () => OnUi(ShowMainWindow),
-            () => OnUi(() => _browserWindow?.ShowForUser()),
-            () => OnUi(() => _browserWindow?.Hide()),
+            () => OnUi(ShowMainWindow),
+            () => OnUi(Hide),
             () => OnUi(async () => await SendNowAsync()),
             () => OnUi(PauseOrResume),
             () => OnUi(StopRun),
@@ -171,13 +171,21 @@ public partial class MainWindow : Window
             "OpenGameMate captures the entire primary display only after you start. It does not read replies, history, cookies, tokens, or audio.");
         BrowserGroup.Header = T("1. ChatGPT 与 Voice", "1. ChatGPT and Voice");
         OpenBrowserButton.Content = T("打开 ChatGPT", "Open ChatGPT");
-        ShowBrowserButton.Content = T("显示", "Show");
-        HideBrowserButton.Content = T("隐藏", "Hide");
-        CloseBrowserButton.Content = T("关闭并结束 Voice", "Close and end Voice");
+        ShowBrowserButton.Content = T("显示窗口", "Show window");
+        HideBrowserButton.Content = T("隐藏到托盘", "Hide to tray");
+        CloseBrowserButton.Content = T("关闭网页并结束 Voice", "Close page and end Voice");
         BrowserInstructionText.Text = T(
-            "请在独立窗口自行登录并开启 Voice，然后回到这里确认。",
-            "Sign in and start Voice in the separate window, then confirm here.");
+            "请在右侧内嵌页面自行登录并开启 Voice，然后在这里确认。",
+            "Sign in and start Voice in the embedded page, then confirm here.");
         ConfirmVoiceButton.Content = T("我已开启 Voice", "I started Voice");
+        BrowserPaneTitleText.Text = "ChatGPT";
+        BrowserPaneCaptionText.Text = T(
+            "内嵌网页 · 登录与 Voice 由你控制",
+            "Embedded page · sign-in and Voice stay under your control");
+        BrowserPlaceholderTitleText.Text = T("ChatGPT 将显示在这里", "ChatGPT will appear here");
+        BrowserPlaceholderDescriptionText.Text = T(
+            "点击左侧“打开 ChatGPT”，网页会直接嵌入 OpenGameMate，不再弹出独立窗口。",
+            "Select Open ChatGPT on the left. The page stays inside OpenGameMate instead of opening a separate window.");
         RoleGroup.Header = T("2. 可选角色初始化", "2. Optional role initialization");
         RoleInstructionText.Text = T(
             "首次使用可由你明确发送一次完整陪玩设定；不会自动发送。",
@@ -211,35 +219,46 @@ public partial class MainWindow : Window
     }
 
     private async void OpenBrowserButton_Click(object sender, RoutedEventArgs e) =>
-        await EnsureBrowserAsync(activate: true, automaticRecovery: false);
+        await EnsureBrowserAsync(activate: true);
 
-    private void ShowBrowserButton_Click(object sender, RoutedEventArgs e) => _browserWindow?.ShowForUser();
+    private void ShowBrowserButton_Click(object sender, RoutedEventArgs e) => ShowMainWindow();
 
-    private void HideBrowserButton_Click(object sender, RoutedEventArgs e) => _browserWindow?.Hide();
+    private void HideBrowserButton_Click(object sender, RoutedEventArgs e) => Hide();
 
     private void CloseBrowserButton_Click(object sender, RoutedEventArgs e)
     {
-        _expectedBrowserClose = true;
-        _browserWindow?.Close();
+        CloseEmbeddedBrowser(applyStateTransition: true);
+        AddActivity(T("ChatGPT 网页已关闭；Voice 会话已结束。", "ChatGPT page closed; the Voice session ended."));
     }
 
-    private async Task EnsureBrowserAsync(bool activate, bool automaticRecovery)
+    private async Task EnsureBrowserAsync(bool activate)
     {
-        if (_browserWindow is not null)
+        if (_browserSession is not null || _browserInitializing)
         {
-            _browserWindow.ShowForUser(activate);
+            if (activate)
+            {
+                ShowMainWindow();
+            }
+
             return;
         }
 
+        _browserInitializing = true;
+        BrowserPlaceholder.Visibility = Visibility.Visible;
+        BrowserPlaceholderTitleText.Text = T("正在准备 ChatGPT", "Preparing ChatGPT");
+        BrowserPlaceholderDescriptionText.Text = T(
+            "正在初始化独立的 WebView2 用户数据环境，请稍候。",
+            "Initializing the isolated WebView2 user-data environment.");
+        UpdateUi();
+
         try
         {
-            _browserWindow = new BrowserWindow();
-            _browserWindow.Closing += BrowserWindow_Closing;
-            _browserWindow.Closed += BrowserWindow_Closed;
-            _browserWindow.ShowForUser(activate);
+            _browserView = new WebView2();
+            Panel.SetZIndex(_browserView, 0);
+            BrowserHost.Children.Insert(0, _browserView);
 
             _browserSession = new ChatGptBrowserSession(
-                _browserWindow.WebView,
+                _browserView,
                 _paths.WebViewUserDataDirectory,
                 PromptForMicrophoneAsync,
                 FindBrowserRuntime());
@@ -248,15 +267,16 @@ public partial class MainWindow : Window
             _browserSession.AudioStateChanged += BrowserSession_AudioStateChanged;
             await _browserSession.InitializeAsync();
             _adapter = new ChatGptWebAdapter(_browserSession, ChatGptAdapterRules.BuiltIn);
+            BrowserPlaceholder.Visibility = Visibility.Collapsed;
 
             if (_stateMachine.State == GameMateState.Idle)
             {
                 ApplyTrigger(GameMateTrigger.BrowserInitialized);
             }
 
-            AddActivity(automaticRecovery
-                ? T("ChatGPT 已自动重开一次；请重新开启 Voice 并确认。", "ChatGPT was reopened once. Restart Voice and confirm.")
-                : T("ChatGPT 已打开；登录和 Voice 由你控制。", "ChatGPT opened; sign-in and Voice remain under your control."));
+            AddActivity(T(
+                "ChatGPT 已嵌入主窗口；登录和 Voice 由你控制。",
+                "ChatGPT is embedded in the main window; sign-in and Voice remain under your control."));
             await SafeLogAsync("browser.initialized", DiagnosticLevel.Information, success: true);
             await SafeLogAsync(
                 "adapter.rules-selected",
@@ -277,6 +297,10 @@ public partial class MainWindow : Window
         {
             await ReportExceptionAsync("browser.initialization-failed", "browser-init", exception);
             CleanupFailedBrowserInitialization();
+        }
+        finally
+        {
+            _browserInitializing = false;
         }
 
         UpdateUi();
@@ -305,16 +329,7 @@ public partial class MainWindow : Window
 
     private void CleanupFailedBrowserInitialization()
     {
-        _expectedBrowserClose = true;
-        if (_browserWindow is not null)
-        {
-            _browserWindow.Close();
-        }
-
-        _browserSession?.Dispose();
-        _browserSession = null;
-        _browserWindow = null;
-        _adapter = null;
+        CloseEmbeddedBrowser(applyStateTransition: false);
     }
 
     private void BrowserSession_StatusChanged(object? sender, string message) =>
@@ -342,18 +357,9 @@ public partial class MainWindow : Window
             audioSilentDurationMs: args.IsPlaying ? 0 : 0);
     }
 
-    private void BrowserWindow_Closing(object? sender, CancelEventArgs e) => _browserSession?.Dispose();
-
-    private void BrowserWindow_Closed(object? sender, EventArgs e)
+    private void CloseEmbeddedBrowser(bool applyStateTransition)
     {
-        var shouldRecover = !_isExiting && !_expectedBrowserClose && IsRunRelatedState(_stateMachine.State);
         _runCancellation?.Cancel();
-
-        if (_browserWindow is not null)
-        {
-            _browserWindow.Closing -= BrowserWindow_Closing;
-            _browserWindow.Closed -= BrowserWindow_Closed;
-        }
 
         if (_browserSession is not null)
         {
@@ -363,29 +369,30 @@ public partial class MainWindow : Window
             _browserSession.Dispose();
         }
 
-        _browserWindow = null;
         _browserSession = null;
         _adapter = null;
-        if (_stateMachine.CanApply(GameMateTrigger.BrowserClosed))
+
+        if (_browserView is not null)
+        {
+            BrowserHost.Children.Remove(_browserView);
+            _browserView.Dispose();
+            _browserView = null;
+        }
+
+        BrowserPlaceholder.Visibility = Visibility.Visible;
+        BrowserPlaceholderTitleText.Text = T("ChatGPT 将显示在这里", "ChatGPT will appear here");
+        BrowserPlaceholderDescriptionText.Text = T(
+            "点击左侧“打开 ChatGPT”，网页会直接嵌入 OpenGameMate，不再弹出独立窗口。",
+            "Select Open ChatGPT on the left. The page stays inside OpenGameMate instead of opening a separate window.");
+
+        if (applyStateTransition && _stateMachine.CanApply(GameMateTrigger.BrowserClosed))
         {
             ApplyTrigger(GameMateTrigger.BrowserClosed);
         }
-
-        _expectedBrowserClose = false;
-        if (shouldRecover && _browserRestartGate.TryConsumeAutomaticRestart())
+        else
         {
-            _resumeAfterBrowserRecovery = true;
-            _trayIcon?.Notify(
-                "OpenGameMate",
-                T("ChatGPT 已关闭，正在后台重开一次。请重新开启 Voice。", "ChatGPT closed. Reopening once; restart Voice."));
-            OnUi(async () => await EnsureBrowserAsync(activate: false, automaticRecovery: true));
+            UpdateUi();
         }
-        else if (shouldRecover)
-        {
-            AddActivity(T("ChatGPT 再次关闭；不会继续自动重开。", "ChatGPT closed again; no further automatic restart."));
-        }
-
-        UpdateUi();
     }
 
     private Task<bool> PromptForMicrophoneAsync(Uri uri)
@@ -425,12 +432,6 @@ public partial class MainWindow : Window
             ApplyTrigger(GameMateTrigger.VoiceConfirmed);
             AddActivity(T("Voice 已由用户确认。", "Voice was confirmed by the user."));
             _ = SafeLogAsync("voice.user-confirmed", DiagnosticLevel.Information, success: true);
-        }
-
-        if (_resumeAfterBrowserRecovery && _stateMachine.State == GameMateState.Ready)
-        {
-            _resumeAfterBrowserRecovery = false;
-            BeginRun(resetConversationTracker: false);
         }
 
         UpdateUi();
@@ -528,7 +529,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        _browserRestartGate.ResetForUserStartedSession();
         BeginRun(resetConversationTracker: true);
     }
 
@@ -1390,11 +1390,24 @@ public partial class MainWindow : Window
 
         var state = _stateMachine.State;
         StateText.Text = state.ToString();
-        var browserAvailable = _browserWindow is not null;
-        OpenBrowserButton.IsEnabled = !browserAvailable;
+        StateIndicator.Fill = state switch
+        {
+            GameMateState.Running => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(75, 139, 91)),
+            GameMateState.Sending => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(47, 111, 237)),
+            GameMateState.AdapterError => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(190, 76, 65)),
+            GameMateState.VoiceOnly => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(184, 132, 41)),
+            _ => new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(140, 135, 132)),
+        };
+        var browserAvailable = _browserSession is not null && _browserView is not null;
+        OpenBrowserButton.IsEnabled = !browserAvailable && !_browserInitializing;
         ShowBrowserButton.IsEnabled = browserAvailable;
         HideBrowserButton.IsEnabled = browserAvailable;
         CloseBrowserButton.IsEnabled = browserAvailable;
+        BrowserPaneStatusText.Text = _browserInitializing
+            ? T("正在初始化", "Initializing")
+            : browserAvailable
+                ? T("已连接", "Connected")
+                : T("尚未打开", "Not opened");
         ConfirmVoiceButton.IsEnabled = browserAvailable &&
             state is GameMateState.BrowserReady or GameMateState.Stopped or GameMateState.Idle;
         var canSendRole = !_auxiliaryOperation && _adapter is not null &&
@@ -1568,9 +1581,7 @@ public partial class MainWindow : Window
         _runCancellation?.Cancel();
         _runCancellation?.Dispose();
         _runCancellation = null;
-        _expectedBrowserClose = true;
-        _browserWindow?.Close();
-        _browserSession?.Dispose();
+        CloseEmbeddedBrowser(applyStateTransition: false);
         try
         {
             _capture.DeleteTemporaryScreenshot();

@@ -27,9 +27,9 @@ public sealed class TrayIconController : IDisposable
         var menu = new Forms.ContextMenuStrip();
         _showMain = menu.Items.Add("Show OpenGameMate", null, (_, _) => showMain()) as Forms.ToolStripMenuItem
             ?? throw new InvalidOperationException("Unable to create tray menu item.");
-        _showBrowser = menu.Items.Add("Show ChatGPT", null, (_, _) => showBrowser()) as Forms.ToolStripMenuItem
+        _showBrowser = menu.Items.Add("Show window", null, (_, _) => showBrowser()) as Forms.ToolStripMenuItem
             ?? throw new InvalidOperationException("Unable to create tray menu item.");
-        _hideBrowser = menu.Items.Add("Hide ChatGPT", null, (_, _) => hideBrowser()) as Forms.ToolStripMenuItem
+        _hideBrowser = menu.Items.Add("Hide to tray", null, (_, _) => hideBrowser()) as Forms.ToolStripMenuItem
             ?? throw new InvalidOperationException("Unable to create tray menu item.");
         menu.Items.Add(new Forms.ToolStripSeparator());
         _sendNow = menu.Items.Add("Send now", null, (_, _) => sendNow()) as Forms.ToolStripMenuItem
@@ -63,8 +63,8 @@ public sealed class TrayIconController : IDisposable
     {
         _notifyIcon.Text = $"OpenGameMate - {state}"[..Math.Min(63, $"OpenGameMate - {state}".Length)];
         _showMain.Text = chinese ? "显示主界面" : "Show OpenGameMate";
-        _showBrowser.Text = chinese ? "显示 ChatGPT" : "Show ChatGPT";
-        _hideBrowser.Text = chinese ? "隐藏 ChatGPT" : "Hide ChatGPT";
+        _showBrowser.Text = chinese ? "显示主窗口" : "Show window";
+        _hideBrowser.Text = chinese ? "隐藏到托盘" : "Hide to tray";
         _sendNow.Text = chinese ? "立即发送" : "Send now";
         _pauseResume.Text = paused
             ? chinese ? "恢复" : "Resume"

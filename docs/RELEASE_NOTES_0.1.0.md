@@ -23,7 +23,7 @@ The detailed, fillable user procedure is [USER_RC_CHECKLIST_0.1.0.md](USER_RC_CH
 
 ## Included
 
-- Bilingual WPF main window and independent ChatGPT WebView2 window.
+- Bilingual WPF application shell with ChatGPT WebView2 embedded in the main window and an isolated user-data environment.
 - Installed and portable data modes.
 - User-controlled sign-in, microphone permission, Voice confirmation, and optional role initialization.
 - Primary-display capture at no more than 1920×1080 with temporary-file cleanup.
