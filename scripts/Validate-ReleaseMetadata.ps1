@@ -132,6 +132,9 @@ foreach ($requiredFragment in @(
     '#ifndef MyAppVersion',
     'OutputBaseFilename=OpenGameMate-Setup-{#MyAppVersion}',
     'OutputDir={#MyInstallerOutputDirectory}',
+    '#define MyAppIconName "OpenGameMate.AppIcon.2.ico"',
+    'DestName: "{#MyAppIconName}"',
+    'IconFilename: "{app}\{#MyAppIconName}"',
     'Source: "{#MySourceDirectory}\*"',
     'SetupIconFile=..\assets\OpenGameMate.AppIcon.ico',
     'Name: "chinesesimplified"; MessagesFile: "Languages\ChineseSimplified.isl"',
@@ -140,13 +143,23 @@ foreach ($requiredFragment in @(
     'Description: "{cm:LaunchProgram,{#MyAppName}}"',
     'english.GameAccountRiskTitle=Game account risk warning',
     'chinesesimplified.GameAccountRiskTitle=',
-    "GetPreviousData('GameAccountRiskAccepted', '') = '1'",
     'GameAccountRiskPage := CreateInputOptionPage(',
     'function PrepareToInstall(var NeedsRestart: Boolean): String;',
-    "SetPreviousData(PreviousDataKey, 'GameAccountRiskAccepted', '1')"
+    'if not GameAccountRiskPage.Values[0] then'
 )) {
     if ($innoDefinition.IndexOf($requiredFragment, [StringComparison]::Ordinal) -lt 0) {
         throw "Inno Setup definition is missing required release macro usage: $requiredFragment"
+    }
+}
+
+foreach ($forbiddenFragment in @(
+    "GetPreviousData('GameAccountRiskAccepted'",
+    "SetPreviousData(PreviousDataKey, 'GameAccountRiskAccepted'",
+    'GameAccountRiskPreviouslyAccepted',
+    'function ShouldSkipPage(PageID: Integer): Boolean;'
+)) {
+    if ($innoDefinition.IndexOf($forbiddenFragment, [StringComparison]::Ordinal) -ge 0) {
+        throw "Inno Setup definition must show the account-risk page for every installation: $forbiddenFragment"
     }
 }
 
