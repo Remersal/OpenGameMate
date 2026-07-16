@@ -37,6 +37,9 @@ portable/
 *.jpeg
 !assets/OpenGameMate.AppIcon.png
 !assets/social-preview.png
+!docs/demo/opengamemate-icon.png
+!docs/demo/english-poster.jpg
+!docs/demo/chinese-poster.jpg
 
 # Machine-local settings and credentials
 .env
