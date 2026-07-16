@@ -34,10 +34,10 @@
 
 ## 实际效果与演示
 
-观看 OpenGameMate 真实宣传视频：
+在线观看 OpenGameMate 真实宣传视频：
 
-- [英文版宣传视频 — 24 秒](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Promo-English.mp4)
-- [中文版宣传视频 — 40 秒](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Promo-Chinese.mp4)
+- [英文版宣传视频 — 24 秒](https://remersal.github.io/OpenGameMate/demo/#english)
+- [中文版宣传视频 — 40 秒](https://remersal.github.io/OpenGameMate/demo/#chinese)
 
 录屏展示了真实游戏画面、ChatGPT Voice 与 OpenGameMate 的屏幕陪玩流程，没有使用模拟产品界面。如果你希望录制更多真实演示，请参考[演示录制指南](docs/DEMO_RECORDING_GUIDE.md)。
 
