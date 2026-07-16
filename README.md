@@ -34,9 +34,12 @@
 
 ## Demo
 
-**Demo coming soon.** The repository does not yet contain a privacy-reviewed recording, so no simulated product footage is shown here.
+Watch real OpenGameMate promotional footage:
 
-Want to help record the real flow? Follow the [20–40 second demo recording guide](docs/DEMO_RECORDING_GUIDE.md).
+- [English promo video — 24 seconds](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Promo-English.mp4)
+- [Chinese promo video — 40 seconds](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Promo-Chinese.mp4)
+
+The recordings show live gameplay, ChatGPT Voice, and OpenGameMate's screen-aware companion flow. No simulated product interface is used. To record another real demonstration, follow the [demo recording guide](docs/DEMO_RECORDING_GUIDE.md).
 
 ## Core features
 

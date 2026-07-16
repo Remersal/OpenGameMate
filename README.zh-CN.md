@@ -34,9 +34,12 @@
 
 ## 实际效果与演示
 
-**Demo coming soon。** 仓库目前还没有经过隐私检查的真实录屏，因此这里不会放置模拟演示、假界面或空白占位图。
+观看 OpenGameMate 真实宣传视频：
 
-如果你愿意帮助录制真实流程，请按照 [20～40 秒演示录制指南](docs/DEMO_RECORDING_GUIDE.md) 操作。
+- [英文版宣传视频 — 24 秒](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Promo-English.mp4)
+- [中文版宣传视频 — 40 秒](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Promo-Chinese.mp4)
+
+录屏展示了真实游戏画面、ChatGPT Voice 与 OpenGameMate 的屏幕陪玩流程，没有使用模拟产品界面。如果你希望录制更多真实演示，请参考[演示录制指南](docs/DEMO_RECORDING_GUIDE.md)。
 
 ## 核心功能
 
