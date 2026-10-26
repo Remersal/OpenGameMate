@@ -527,6 +527,8 @@ public partial class MainWindow : Window
             _browserSession.AudioStateChanged += BrowserSession_AudioStateChanged;
             await _browserSession.InitializeAsync();
             _adapter = new ChatGptWebAdapter(_browserSession, ChatGptAdapterRules.BuiltIn);
+            await SafeLogAsync("adapter.rules-version", DiagnosticLevel.Information,
+                errorCode: ChatGptAdapterRules.BuiltIn.RulesVersion);
             BrowserPlaceholder.Visibility = Visibility.Collapsed;
 
             if (_stateMachine.State == GameMateState.Idle)
@@ -735,6 +737,8 @@ public partial class MainWindow : Window
         try
         {
             var preparation = await _adapter.PrepareTextAsync(text);
+            await SafeLogAsync("adapter.role-prepared", DiagnosticLevel.Information,
+                errorCode: preparation.Code, success: preparation.Status == WebAdapterStatus.Succeeded);
             if (!preparation.TextInserted || preparation.Status != WebAdapterStatus.Succeeded)
             {
                 HandleAdapterFailure(preparation.Status, "role-prepare");
@@ -1213,6 +1217,8 @@ public partial class MainWindow : Window
             ? CompanionPrompts.ManualScreenshot(PromptLanguage)
             : CompanionPrompts.AutomaticScreenshot(PromptLanguage);
         var preparation = await _adapter!.PrepareInputAsync(capture.Path, message, cancellationToken);
+        await SafeLogAsync("adapter.input-prepared", DiagnosticLevel.Information,
+            errorCode: preparation.Code, success: preparation.Status == WebAdapterStatus.Succeeded);
         if (preparation.Status != WebAdapterStatus.Succeeded ||
             !preparation.ImageAdded ||
             !preparation.TextInserted)
@@ -1292,6 +1298,8 @@ public partial class MainWindow : Window
             pendingCreatedAt: pending.PendingCreatedAt,
             attachStartedAt: attachStartedAt);
         var attachment = await _adapter!.PrepareImageAsync(capture.Path, cancellationToken);
+        await SafeLogAsync("adapter.image-prepared", DiagnosticLevel.Information,
+            errorCode: attachment.Code, success: attachment.Status == WebAdapterStatus.Succeeded);
         if (attachment.Status != WebAdapterStatus.Succeeded || !attachment.ImageAdded)
         {
             return MapAdapterStatus(attachment.Status);
@@ -1318,6 +1326,8 @@ public partial class MainWindow : Window
 
         var message = CompanionPrompts.AutomaticScreenshot(PromptLanguage);
         var text = await _adapter.PrepareTextAsync(message, cancellationToken);
+        await SafeLogAsync("adapter.text-prepared", DiagnosticLevel.Information,
+            errorCode: text.Code, success: text.Status == WebAdapterStatus.Succeeded);
         var textSetAt = DateTimeOffset.UtcNow;
         if (text.Status != WebAdapterStatus.Succeeded || !text.TextInserted)
         {

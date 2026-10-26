@@ -1,6 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <EmbeddedResource Include="ChatGptComposerDom.js" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\OpenGameMate.Core\OpenGameMate.Core.csproj" />
     <ProjectReference Include="..\OpenGameMate.Browser\OpenGameMate.Browser.csproj" />
   </ItemGroup>
