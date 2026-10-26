@@ -44,6 +44,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
     private const int MaximumDiagnosticButtonCandidates = 12;
     private const int MaximumDiagnosticScopeDepth = 8;
     private const int SubmitControlPollAttempts = 120;
+    private const int PostSubmitPollAttempts = 40;
     private const int SubmitControlPollIntervalMilliseconds = 250;
     private const int MaximumMessageCharacters = 8000;
     private const long MaximumImageBytes = 20 * 1024 * 1024;
@@ -227,10 +228,10 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 })()
                 """);
         }
-        else if (GetCode(locateFileInput) == "file-input-none")
+        else if (GetCode(locateFileInput) is "file-input-none" or "file-input-ambiguous")
         {
-            // No input owned by the validated composer exists. Paste only into that same
-            // composer; never choose an unrelated page input or open a native picker.
+            // Never choose between ambiguous native inputs. The separate paste path targets
+            // only the same validated composer and still requires a visible accepted preview.
             var imageBase64Json = JsonSerializer.Serialize(
                 Convert.ToBase64String(await File.ReadAllBytesAsync(imagePath, cancellationToken)));
             attachmentResult = await EvaluateAsync(
@@ -419,7 +420,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                   const form = ogmScope(composer);
                   const stopButtons = [...document.querySelectorAll({{busyButtonSelectorJson}})].filter(ogmVisible);
                   const sendButtons = form
-                    ? [...form.querySelectorAll({{sendButtonSelectorJson}})].filter(ogmVisible)
+                    ? [...form.querySelectorAll({{sendButtonSelectorJson}})].filter(button => ogmOwnedButton(button, form))
                     : [];
                   const sendDisabled = sendButtons.length === 1 &&
                     (sendButtons[0].disabled ||
@@ -430,7 +431,11 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                     'button[data-testid="end-voice-mode-button"],' +
                     '[data-testid="voice-mode-composer"]';
                   const hasVoiceControl = ogmVoice();
-                  const pageState = composers.length !== 1 || !form ? 'Unknown' : hasVoiceControl
+                  // An empty unified composer can replace submit with an unclassified activity
+                  // control. Keep automatic preparation closed until send readiness is explicit.
+                  const unclassifiedUnifiedState = form?.hasAttribute('data-chatgpt-composer') &&
+                    sendButtons.length === 0 && !hasVoiceControl;
+                  const pageState = composers.length !== 1 || !form || unclassifiedUnifiedState ? 'Unknown' : hasVoiceControl
                     ? (hasAttachment ? 'VoiceComposerWithAttachment' : 'VoiceComposer')
                     : (hasAttachment ? 'ComposerWithAttachment' : 'Composer');
                   const allFormButtons = form ? [...form.querySelectorAll('button')] : [];
@@ -720,7 +725,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 }
                 return {{MaximumDiagnosticScopeDepth + 1}};
               };
-              const allButtons = [...scope.querySelectorAll('button')].filter(ogmVisible);
+              const allButtons = [...scope.querySelectorAll('button')].filter(button => ogmOwnedButton(button, scope));
               const discoveredButtons = allButtons.map(button => ({ button, scopeDepth: 0 }));
               const seenButtons = new Set(allButtons);
               for (const button of document.querySelectorAll(
@@ -846,7 +851,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                       const scope = ogmScope(composers[0]);
                       if (!scope) return { code: 'composer-form-missing-before-invoke', invoked: false };
                       const busyButtons = [...document.querySelectorAll({{busyButtonSelectorJson}})].filter(ogmVisible);
-                      const buttons = [...scope.querySelectorAll({{sendButtonSelectorJson}})].filter(ogmVisible);
+                      const buttons = [...scope.querySelectorAll({{sendButtonSelectorJson}})].filter(button => ogmOwnedButton(button, scope));
                       const attachmentSelectors = {{attachmentPreviewSelectorsJson}};
                       const hasAttachment = ogmHasAttachment(scope);
                       const hasVoiceControl = ogmVoice();
@@ -914,8 +919,15 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             await Task.Delay(SubmitControlPollIntervalMilliseconds, cancellationToken);
         }
 
-        await Task.Delay(1000, cancellationToken);
-        var stateResult = await EvaluateAsync(
+        JsonElement stateResult = default;
+        for (var attempt = 0; attempt < PostSubmitPollAttempts; attempt++)
+        {
+            if (attempt > 0)
+            {
+                await Task.Delay(SubmitControlPollIntervalMilliseconds, cancellationToken);
+            }
+
+            stateResult = await EvaluateAsync(
             $$"""
             (() => {
               const composers = ogmComposers({{composerSelectorJson}});
@@ -938,6 +950,12 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
               };
             })()
             """);
+            if (GetCode(stateResult) != "ok" || GetBoolean(stateResult, "submissionObserved") ||
+                GetBoolean(stateResult, "quotaDetected") || GetBoolean(stateResult, "platformErrorDetected"))
+            {
+                break;
+            }
+        }
 
         var quotaDetected = GetBoolean(stateResult, "quotaDetected");
         var platformErrorDetected = GetBoolean(stateResult, "platformErrorDetected");

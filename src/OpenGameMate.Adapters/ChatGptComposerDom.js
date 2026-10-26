@@ -18,6 +18,8 @@ const ogmEditable = element => ogmVisible(element) &&
 const ogmComposers = selector => {
   const candidates = new Set();
   for (const root of document.querySelectorAll(selector)) {
+    const markedForm = root.closest('form[data-chatgpt-composer]');
+    if (markedForm && root.closest('form') !== markedForm) continue;
     if (ogmEditable(root)) candidates.add(root);
     else for (const element of root.querySelectorAll(
       'textarea,[contenteditable="true"],[contenteditable="plaintext-only"],[role="textbox"]')) {
@@ -28,6 +30,8 @@ const ogmComposers = selector => {
 };
 const ogmScope = composer => composer?.closest('form') ??
   composer?.closest('[data-testid="voice-mode-composer"]') ?? null;
+const ogmOwnedButton = (button, scope) => ogmVisible(button) && scope.contains(button) &&
+  (!button.form || button.form === scope);
 const ogmFileInputs = (selector, scope) => [...document.querySelectorAll(selector)]
   .filter(element => element instanceof HTMLInputElement && element.type === 'file' &&
     !element.matches(':disabled') && element.getAttribute('aria-disabled') !== 'true' &&
@@ -35,7 +39,7 @@ const ogmFileInputs = (selector, scope) => [...document.querySelectorAll(selecto
     (!element.accept || /image|png|jpe?g|gif/i.test(element.accept)) &&
     (element.form ? element.form === scope : scope.contains(element)));
 const ogmText = composer => composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement
-  ? composer.value : composer.innerText;
+  ? composer.value : composer.textContent === '' ? '' : composer.innerText || composer.textContent;
 const ogmAttachments = scope => scope ? [...new Set(ogmAttachmentSelectors.flatMap(
   selector => [...scope.querySelectorAll(selector)].filter(ogmVisible)))] : [];
 const ogmHasAttachment = scope => ogmAttachments(scope).length > 0;

@@ -206,5 +206,23 @@ internal static class Program
         combined = await adapter.PrepareInputAsync(image, message);
         Check(combined.Status == WebAdapterStatus.Succeeded, "composer paste prepares only when the synthetic receiver accepts it");
         Check((await adapter.SubmitAsync()).Status == WebAdapterStatus.Succeeded, "paste workflow confirms actual preview clearance");
+
+        await Fixture(pasteOnly: true);
+        await Eval("(() => {const form=document.querySelector('form');form.setAttribute('data-chatgpt-composer','');form.onsubmit=e=>e.preventDefault();const editor=document.createElement('div');editor.contentEditable='true';editor.setAttribute('role','textbox');editor.onpaste=document.querySelector('textarea').onpaste;document.querySelector('textarea').replaceWith(editor);for(let n=0;n<4;n++){const i=document.createElement('input');i.type='file';i.accept='image/*';i.hidden=true;form.append(i);}const b=document.querySelector('button');b.removeAttribute('data-testid');b.type='submit';b.onclick=()=>{globalThis.clicks++;editor.replaceChildren();form.querySelectorAll('[data-testid=attachment]').forEach(p=>p.remove());};return true;})()");
+        combined = await adapter.PrepareInputAsync(image, message);
+        Check(combined.Status == WebAdapterStatus.Succeeded && combined.AttachmentPreviewDetected && combined.TextInserted,
+            "live unified form prepares through its unique editable receiver with ambiguous native inputs");
+        Check((await Eval("[...document.querySelectorAll('input')].every(i=>i.files.length===0)")).GetBoolean(),
+            "ambiguous native file inputs are never selected");
+        Check((await adapter.SubmitAsync()).Status == WebAdapterStatus.Succeeded,
+            "unified form invokes one semantic submit and confirms both channels");
+
+        await Fixture();
+        await adapter.PrepareInputAsync(image, message);
+        await Eval("document.querySelector('button').onclick=()=>{globalThis.clicks++;setTimeout(()=>{document.querySelector('textarea').value='';document.querySelectorAll('[data-testid=attachment]').forEach(p=>p.remove());},1500);};");
+        submission = await adapter.SubmitAsync();
+        Check(submission.Status == WebAdapterStatus.Succeeded && submission.ComposerCleared && submission.AttachmentCleared,
+            "asynchronous clearance after the former one-second deadline is observed without a second click");
+        Check((await Eval("globalThis.clicks")).GetInt32() == 1, "post-submit observation polls never repeat the send");
     }
 }

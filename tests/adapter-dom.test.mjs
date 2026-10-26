@@ -144,18 +144,19 @@ before(async () => {
     } else if (data.method === 'Fetch.requestPaused') {
       void cdp('Fetch.fulfillRequest', { requestId: data.params.requestId, responseCode: 200,
         responseHeaders: [{ name: 'Content-Type', value: 'text/html' }],
-        body: Buffer.from('<!doctype html><html><body>Synthetic adapter fixture</body></html>').toString('base64') });
+        body: Buffer.from('<!doctype html><html><body data-ogm-fixture="true">Synthetic adapter fixture</body></html>').toString('base64') });
     }
   };
   await cdp('Page.enable');
   await cdp('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
-  const loaded = new Promise(resolve => { pageLoaded = resolve; });
   await cdp('Page.navigate', { url: 'https://chatgpt.com/opengamemate-synthetic-test' });
-  await Promise.race([loaded, delay(10000).then(() => { throw new Error('Synthetic page did not finish loading'); })]);
+  let fixtureReady = false;
   for (let attempt = 0; attempt < 50; attempt++) {
-    if (await evaluate("location.hostname === 'chatgpt.com'")) break;
+    fixtureReady = await evaluate("location.hostname === 'chatgpt.com' && document.readyState === 'complete' && document.body?.hasAttribute('data-ogm-fixture')");
+    if (fixtureReady) break;
     await delay(100);
   }
+  assert.equal(fixtureReady, true, 'intercepted synthetic document is complete');
   frameId = (await cdp('Page.getFrameTree')).frameTree.frame.id;
 }, { timeout: 25000 });
 after(async () => {
@@ -184,6 +185,67 @@ test('known prompt wrapper resolves its unique visible contenteditable', async (
 test('overlapping prompt and known Voice anchors deduplicate the same editor', async () => {
   await fixture(form('<div data-testid="voice-mode-composer"><div id="prompt-textarea" contenteditable="true" role="textbox"></div>' + send + '</div>'));
   assert.equal((await probe('idle')).composerCount, 1);
+});
+const unifiedEditor = '<div role="textbox" contenteditable="true"></div>';
+const unified = content => `<form id="target" data-chatgpt-composer>${content}</form>`;
+test('live unified form resolves its unique editor and semantic submit control', async () => {
+  await fixture(unified(unifiedEditor + '<button type="submit">Send</button>'));
+  await evaluate('document.querySelector("form").onsubmit=e=>e.preventDefault()');
+  await prepareText();
+  assert.equal((await probe('control')).sendButtonCount, 1);
+  assert.equal((await probe('invoke')).invoked, true);
+});
+test('an empty contenteditable paragraph is empty, while a whitespace draft is preserved', async () => {
+  await fixture(unified('<div role="textbox" contenteditable="true"><p><br></p></div>' + send));
+  await prepareText();
+  await fixture(unified('<div role="textbox" contenteditable="true"> </div>' + send));
+  assert.equal((await probe('insert')).code, 'composer-not-empty');
+});
+test('unmarked form and unrelated textbox do not become composer candidates', async () => {
+  await fixture(form(unifiedEditor + send));
+  assert.equal((await probe('idle')).composerCount, 0);
+  await fixture(unified(unifiedEditor + send) + '<form>' + unifiedEditor + '</form>');
+  assert.equal((await probe('idle')).composerCount, 1);
+});
+test('multiple live-form editors or multiple marked forms fail closed', async () => {
+  for (const html of [unified(unifiedEditor + unifiedEditor + send), unified(unifiedEditor + send) + unified(unifiedEditor + send)]) {
+    await fixture(html);
+    assert.equal((await probe('insert')).textInserted, false);
+    assert.equal((await probe('idle')).composerCount, 2);
+  }
+});
+test('inactive unified editors are filtered and foreign nested forms are rejected', async () => {
+  for (const attribute of ['hidden', 'aria-readonly="true"', 'aria-disabled="true"', 'inert']) {
+    await fixture(unified(`<section ${attribute}>${unifiedEditor}</section>` + unifiedEditor + send));
+    assert.equal((await probe('idle')).composerCount, 1);
+  }
+  await fixture(unified(send));
+  await evaluate(`(() => {const foreign=document.createElement('form');foreign.innerHTML=${JSON.stringify(unifiedEditor)};document.querySelector('form').append(foreign);})()`);
+  assert.equal((await probe('idle')).composerCount, 0);
+});
+test('unified state without an explicit send control cannot start automatic preparation', async () => {
+  await fixture(unified(unifiedEditor + '<button type="button">Activity</button>'));
+  assert.equal((await probe('idle')).diagnostics.pageState, 'Unknown');
+});
+test('semantic submit controls owned by a foreign form are never counted or clicked', async () => {
+  await fixture(unified(unifiedEditor + '<button type="submit" form="foreign">Wrong form</button>') + '<form id="foreign"></form>');
+  await prepareText();
+  assert.equal((await probe('control')).sendButtonCount, 0);
+  assert.equal((await probe('invoke')).invoked, false);
+  await fixture(unified(unifiedEditor + '<button type="submit">Send</button><button type="submit" form="foreign">Wrong form</button>') + '<form id="foreign"></form>');
+  await evaluate('document.querySelector("#target").onsubmit=e=>e.preventDefault()');
+  await prepareText();
+  assert.equal((await probe('control')).sendButtonCount, 1);
+  assert.equal((await probe('invoke')).invoked, true);
+});
+test('ambiguous native inputs stay untouched while the unique live editor accepts paste', async () => {
+  await fixture(unified(unifiedEditor + input + input + input + '<input type="file" hidden>' + send));
+  await evaluate(`document.querySelector('[role=textbox]').onpaste=e=>{const p=document.createElement('div');p.dataset.testid='attachment';p.textContent='synthetic.png';document.querySelector('form').append(p);e.preventDefault();}`);
+  assert.equal((await probe('locate')).code, 'file-input-ambiguous');
+  assert.equal(await evaluate('document.querySelectorAll("input[data-opengamemate-file]").length'), 0);
+  await probe('paste');
+  assert.equal((await probe('insert', {allowPreparedAttachmentJson:'true'})).textInserted, true);
+  assert.equal((await probe('prepare')).previewDetected, true);
 });
 for (const attribute of ['hidden', 'disabled', 'readonly', 'aria-disabled="true"', 'aria-readonly="true"', 'style="display:none"', 'style="visibility:hidden"']) {
   test(`inactive composer excluded: ${attribute}`, async () => {

@@ -12,10 +12,10 @@ public sealed record ChatGptAdapterRules
     public static ChatGptAdapterRules BuiltIn { get; } = new()
     {
         SchemaVersion = CurrentSchemaVersion,
-        RulesVersion = "builtin-2026.10.26-composer-1",
-        ComposerSelector = "#prompt-textarea,[data-testid=\"voice-mode-composer\"]",
+        RulesVersion = "builtin-2026.10.26-composer-2",
+        ComposerSelector = "#prompt-textarea,[data-testid=\"voice-mode-composer\"],form[data-chatgpt-composer] [role=\"textbox\"][contenteditable=\"true\"]",
         FileInputSelector = "input[type=\"file\"]",
-        SendButtonSelector = "button[data-testid=\"send-button\"]",
+        SendButtonSelector = "button[data-testid=\"send-button\"],form[data-chatgpt-composer] button[type=\"submit\"]",
         BusyButtonSelector = "button[data-testid=\"stop-button\"]",
         AttachmentPreviewSelectors =
         [
