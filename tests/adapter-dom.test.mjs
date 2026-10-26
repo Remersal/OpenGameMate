@@ -62,6 +62,7 @@ const probes = {
   prepare: literal('previewDetected: ogmHasAttachment(scope)'),
   idle: literal("'composer-count-idle-probe'"),
   control: literal('const emptyDiagnostics'),
+  verifySource: literal('const code = await ogmVerifyPreparedLocalSource'),
   invoke: literal('prepared.used = true'),
   observe: literal('submissionObserved:'),
   insert: literal("'native-value-setter-missing'"),
@@ -86,6 +87,10 @@ async function evaluate(expression) {
   return result.result.value;
 }
 async function probe(name, overrides) {
+  if (name === 'invoke') {
+    const identity = await probe('verifySource', overrides);
+    if (identity.code !== 'ok') return { ...identity, invoked: false };
+  }
   let result;
   for (let attempt = 0; attempt < 80; attempt++) {
     result = await evaluate(render(wrapper, { expression: render(probes[name], overrides) }));
@@ -471,12 +476,12 @@ test('an opaque or mutable preview replacement is not content identity', async (
   assert.equal(await evaluate('globalThis.clicks'), 0);
 });
 
-async function startDelayedUpload(script = '') {
+async function startDelayedUpload(script = '', busy = true) {
   await fixture(unified(unifiedEditor + send));
   await evaluate(`document.querySelector('[role=textbox]').onpaste=e=>{
     globalThis.changes++;const file=e.clipboardData.files[0];
     const p=document.createElement('div');p.dataset.testid='attachment';p.dataset.fileName=file.name;
-    p.setAttribute('aria-busy','true');const i=document.createElement('img');i.width=64;i.height=36;
+    ${busy ? "p.setAttribute('aria-busy','true');" : ''}const i=document.createElement('img');i.width=64;i.height=36;
     i.src=URL.createObjectURL(file);p.append(i);document.querySelector('form').append(p);
     ${script} e.preventDefault();};`);
   await probe('locate'); await probe('paste');
@@ -527,7 +532,7 @@ test('source diagnostics distinguish srcset-only changes without returning sourc
   await prepareImmutableImage();
   await evaluate(`document.querySelector('img').srcset='https://chatgpt.com/SYNTHETIC_PRIVATE_SOURCE 1x'`);
   const result = await probe('invoke');
-  assert.equal(result.code, 'prepared-attachment-source-changed');
+  assert.equal(result.code, 'prepared-attachment-content-unverifiable');
   assert.equal(result.attachmentDiagnostics.beforeSrc, 'Blob');
   assert.equal(result.attachmentDiagnostics.afterSrc, 'Blob');
   assert.equal(result.attachmentDiagnostics.beforeSrcSet, 'Empty');
@@ -548,12 +553,76 @@ test('source categories are finite for empty, blob, data, http and mixed attribu
   assert.deepEqual(actual, ['Unknown','Empty','Blob','Data','Http','Other','Mixed']);
 });
 
-test('completion freezes even equal bytes under a new local URL', async () => {
+test('a changed local URL is re-proved from the original File before one click', async () => {
   await startDelayedUpload(`globalThis.originalFile=file;setTimeout(()=>p.setAttribute('aria-busy','false'),80);`);
   assert.equal((await probe('prepare')).code, 'ok');
   await evaluate(`document.querySelector('img').src=URL.createObjectURL(originalFile)`);
-  assert.equal((await probe('invoke')).code, 'prepared-attachment-source-changed');
-  assert.equal(await evaluate('globalThis.clicks'), 0);
+  assert.equal((await probe('invoke')).code, 'ok');
+  assert.equal((await probe('invoke')).invoked, false);
+  assert.equal(await evaluate('globalThis.clicks'), 1);
+});
+
+test('observed blob to data transition prepares without any busy signal when bytes match', async () => {
+  await startDelayedUpload(`const originalFetch=fetch;
+    globalThis.fetch=(...args)=>new Promise(resolve=>setTimeout(()=>resolve(originalFetch(...args)),200));
+    const reader=new FileReader();reader.onload=()=>i.src=reader.result;setTimeout(()=>reader.readAsDataURL(file),40);`, false);
+  const result = await probe('prepare');
+  assert.equal(result.code, 'ok');
+  assert.equal(result.attachmentDiagnostics.beforeSrc, 'Blob');
+  assert.equal(result.attachmentDiagnostics.afterSrc, 'Data');
+  assert.equal(result.attachmentDiagnostics.beforeSrcSet, 'Empty');
+  assert.equal(result.attachmentDiagnostics.afterSrcSet, 'Empty');
+  assert.equal(result.attachmentDiagnostics.busyObserved, false);
+  assert.equal(result.attachmentDiagnostics.completionObserved, false);
+  assert.equal((await probe('invoke')).invoked, true);
+  assert.equal((await probe('invoke')).invoked, false);
+  assert.equal(await evaluate('globalThis.changes'), 1);
+  assert.equal(await evaluate('globalThis.clicks'), 1);
+});
+
+test('late blob to data while Send is disabled is checked before the final synchronous click', async () => {
+  await startDelayedUpload(`globalThis.originalFile=file;document.querySelector('[data-testid=send-button]').disabled=true;`, false);
+  assert.equal((await probe('prepare')).code, 'ok');
+  await evaluate(`(async()=>{const reader=new FileReader();const data=await new Promise(resolve=>{reader.onload=()=>resolve(reader.result);reader.readAsDataURL(originalFile);});
+    document.querySelector('img').src=data;document.querySelector('[data-testid=send-button]').disabled=false;})()`);
+  const identity = await probe('verifySource');
+  assert.equal(identity.code, 'ok');
+  assert.equal(identity.attachmentDiagnostics.beforeSrc, 'Blob');
+  assert.equal(identity.attachmentDiagnostics.afterSrc, 'Data');
+  assert.equal((await probe('invoke')).invoked, true);
+  assert.equal((await probe('invoke')).invoked, false);
+  assert.equal(await evaluate('globalThis.clicks'), 1);
+});
+
+test('without busy, wrong content, bad data, remote sources, oversize data and oversized dimensions never click', async () => {
+  for (const mutation of [
+    `const c=document.createElement('canvas');c.width=1;c.height=1;c.getContext('2d').fillRect(0,0,1,1);document.querySelector('img').src=c.toDataURL('image/png');`,
+    `document.querySelector('img').src='data:image/png;base64,AAAA';`,
+    `document.querySelector('img').src='https://chatgpt.com/SYNTHETIC_REMOTE';`,
+    `document.querySelector('img').src='data:image/png;base64,'+'A'.repeat(4*Math.ceil(20*1024*1024/3)+4);`,
+    `const c=document.createElement('canvas');c.width=1921;c.height=1;document.querySelector('img').src=c.toDataURL('image/png');`,
+  ]) {
+    await startDelayedUpload('', false); assert.equal((await probe('prepare')).code, 'ok');
+    await evaluate(`(()=>{${mutation}})()`);
+    assert.equal((await probe('invoke')).invoked, false);
+    assert.equal(await evaluate('globalThis.clicks'), 0);
+  }
+});
+
+test('text, form, route and Voice changes during late local content proof never click', async () => {
+  for (const mutation of [
+    `document.querySelector('[role=textbox]').textContent='changed';`,
+    `document.querySelector('form').replaceWith(document.querySelector('form').cloneNode(true));`,
+    `history.replaceState(null,'','/SYNTHETIC_CONTEXT_CHANGED');`,
+    `const b=document.createElement('button');b.dataset.testid='end-voice-mode-button';document.body.append(b);`,
+  ]) {
+    await startDelayedUpload(`globalThis.originalFile=file;`, false); assert.equal((await probe('prepare')).code, 'ok');
+    await evaluate(`(async()=>{const reader=new FileReader();const data=await new Promise(resolve=>{reader.onload=()=>resolve(reader.result);reader.readAsDataURL(originalFile);});
+      const i=document.querySelector('img');i.src=data;await i.decode();const originalFetch=fetch;
+      globalThis.fetch=(...args)=>new Promise(resolve=>setTimeout(()=>resolve(originalFetch(...args)),200));setTimeout(()=>{${mutation}},60);})()`);
+    assert.equal((await probe('invoke')).invoked, false);
+    assert.equal(await evaluate('globalThis.clicks'), 0);
+  }
 });
 
 test('staged text cannot re-baseline a removed prepared image', async () => {

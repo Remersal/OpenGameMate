@@ -134,6 +134,7 @@ internal static class Program
                 "<button type='button' data-testid='send-button'>Send</button></form></body></html>";
             await session.Core.CallDevToolsProtocolMethodAsync("Page.setDocumentContent", JsonSerializer.Serialize(new { frameId, html }));
             await Eval("globalThis.__openGameMatePreparedV1=null; globalThis.clicks=0; globalThis.changes=0;");
+            await Eval("globalThis.fixtureNativeFetch??=fetch;globalThis.fetch=fixtureNativeFetch;");
             await Eval("globalThis.acceptFile=file=>{const p=document.createElement('div');p.dataset.testid='attachment';p.setAttribute('aria-busy','true');const i=document.createElement('img');i.width=64;i.height=36;i.src=URL.createObjectURL(file);p.append(i);document.querySelector('#target').append(p);setTimeout(()=>p.setAttribute('aria-busy','false'),80);};");
             var attach = acceptsImage
                 ? "acceptFile(e.clipboardData?.files[0]??e.target.files[0]);"
@@ -255,7 +256,7 @@ internal static class Program
         await PrepareImageLeafAsync();
         await Eval("document.querySelector('img').src='data:image/png;base64,DIFFERENT'");
         submission = await adapter.SubmitAsync();
-        Check(submission.Code == "prepared-attachment-source-changed" && !submission.TriggerInvoked,
+        Check(submission.Code == "prepared-attachment-content-unverifiable" && !submission.TriggerInvoked,
             "same-node image swap returns a bounded source-change code without clicking");
         Check(submission.Diagnostics is
         {
@@ -328,8 +329,9 @@ internal static class Program
         await DelayedUploadFixtureAsync("setTimeout(()=>p.setAttribute('aria-busy','false'),300);");
         await adapter.PrepareInputAsync(image, message);
         await Eval("document.querySelector('img').src=URL.createObjectURL(originalFile)");
-        Check((await adapter.SubmitAsync()).Code == "prepared-attachment-source-changed" && (await Eval("globalThis.clicks")).GetInt32() == 0,
-            "even equal bytes at a new URL are rejected after completion freezes the snapshot");
+        Check((await adapter.SubmitAsync()).Status == WebAdapterStatus.Succeeded &&
+            (await adapter.SubmitAsync()).Code == "input-not-prepared" && (await Eval("globalThis.clicks")).GetInt32() == 1,
+            "a new local URL is re-proved against the original File and grants exactly one click");
 
         await DelayedUploadFixtureAsync("setTimeout(()=>p.setAttribute('aria-busy','false'),300);setTimeout(()=>i.src=URL.createObjectURL(file),400);");
         combined = await adapter.PrepareInputAsync(image, message);
@@ -356,16 +358,82 @@ internal static class Program
             (await adapter.SubmitAsync()).Code == "input-not-prepared",
             "cancelled preparation keeps the draft, releases observation and never retries paste/send");
 
-        foreach (var busy in new[] { true, false })
+        await DelayedUploadFixtureAsync("");
+        combined = await adapter.PrepareInputAsync(image, message);
+        Check(combined.Code == "attachment-upload-timeout" && combined.Status == WebAdapterStatus.AdapterInvalid &&
+            combined.AttachmentPreviewDetected && combined.TextInserted,
+            "an explicitly busy upload still times out without a click");
+        Check((await Eval("globalThis.changes===1 && globalThis.clicks===0 && document.querySelector('textarea').value.length>0 && document.querySelector('img')!==null && globalThis.__openGameMatePreparedV1.upload.file===null")).GetBoolean() &&
+            (await adapter.SubmitAsync()).Code == "input-not-prepared",
+            "timed out upload keeps both draft channels, releases observation and grants no submit permit");
+
+        await DelayedUploadFixtureAsync("const nativeFetch=fetch;globalThis.fetch=(...args)=>new Promise(resolve=>setTimeout(()=>resolve(nativeFetch(...args)),200));const reader=new FileReader();reader.onload=()=>i.src=reader.result;setTimeout(()=>reader.readAsDataURL(file),40);", busy: false);
+        combined = await adapter.PrepareInputAsync(image, message);
+        Check(combined.Status == WebAdapterStatus.Succeeded && combined.Diagnostics?.Attachment is
+        { BeforeSrc: AttachmentSourceKind.Blob, AfterSrc: AttachmentSourceKind.Data, BusyObserved: false, CompletionObserved: false },
+            "the actual no-busy blob-to-data shape prepares only with exact original-File byte equality");
+        Check((await adapter.SubmitAsync()).Status == WebAdapterStatus.Succeeded &&
+            (await adapter.SubmitAsync()).Code == "input-not-prepared" && (await Eval("globalThis.clicks===1 && globalThis.changes===1")).GetBoolean(),
+            "no-busy same-content preparation pastes once and submits exactly once");
+
+        await DelayedUploadFixtureAsync("document.querySelector('button').disabled=true;", busy: false);
+        combined = await adapter.PrepareInputAsync(image, message);
+        Check(combined.Status == WebAdapterStatus.Succeeded && combined.Diagnostics?.Attachment?.AfterSrc == AttachmentSourceKind.Blob,
+            "local image identity can prepare while Send remains disabled without requiring a busy marker");
+        await Eval("setTimeout(()=>{const reader=new FileReader();reader.onload=()=>{document.querySelector('img').src=reader.result;document.querySelector('button').disabled=false;};reader.readAsDataURL(originalFile);},500);");
+        submission = await adapter.SubmitAsync();
+        Check(submission.Status == WebAdapterStatus.Succeeded && submission.Diagnostics?.Attachment is
+        { BeforeSrc: AttachmentSourceKind.Blob, AfterSrc: AttachmentSourceKind.Data, SrcChanged: true, BusyObserved: false },
+            "late blob-to-data after preparation is independently re-proved before the synchronous invocation guard");
+        Check((await adapter.SubmitAsync()).Code == "input-not-prepared" && (await Eval("globalThis.clicks===1 && globalThis.changes===1")).GetBoolean(),
+            "late same-content conversion does not repeat paste or grant another submit permit");
+
+        foreach (var mutation in new[]
         {
-            await DelayedUploadFixtureAsync("", busy);
+            "const c=document.createElement('canvas');c.width=1;c.height=1;c.getContext('2d').fillRect(0,0,1,1);document.querySelector('img').src=c.toDataURL('image/png');",
+            "document.querySelector('img').src='data:image/png;base64,AAAA';",
+            "document.querySelector('img').src='https://chatgpt.com/SYNTHETIC_REMOTE';",
+            "document.querySelector('img').src='data:image/png;base64,'+'A'.repeat(4*Math.ceil(20*1024*1024/3)+4);",
+            "const c=document.createElement('canvas');c.width=1921;c.height=1;document.querySelector('img').src=c.toDataURL('image/png');",
+            "history.replaceState(null,'','/SYNTHETIC_CONTEXT_CHANGED');",
+        })
+        {
+            await DelayedUploadFixtureAsync("", busy: false);
             combined = await adapter.PrepareInputAsync(image, message);
-            Check(combined.Code == (busy ? "attachment-upload-timeout" : "attachment-completion-unobserved") &&
-                combined.Status == WebAdapterStatus.AdapterInvalid && combined.AttachmentPreviewDetected && combined.TextInserted,
-                "timeout distinguishes pending upload from missing completion evidence");
-            Check((await Eval("globalThis.changes===1 && globalThis.clicks===0 && document.querySelector('textarea').value.length>0 && document.querySelector('img')!==null && globalThis.__openGameMatePreparedV1.upload.file===null")).GetBoolean() &&
+            Check(combined.Status == WebAdapterStatus.Succeeded, "negative local-source case starts from a verified no-busy image");
+            await Eval("(()=>{" + mutation + "return true;})()");
+            submission = await adapter.SubmitAsync();
+            Check(!submission.TriggerInvoked && (await Eval("globalThis.clicks")).GetInt32() == 0 &&
                 (await adapter.SubmitAsync()).Code == "input-not-prepared",
-                "timed out upload keeps both draft channels, releases observation and grants no submit permit");
+                "wrong content, malformed/remote/oversize source, dimensions or context cannot click or retry");
         }
+
+        await DelayedUploadFixtureAsync("", busy: false);
+        await adapter.PrepareInputAsync(image, message);
+        await Eval("(async()=>{const reader=new FileReader();const data=await new Promise(resolve=>{reader.onload=()=>resolve(reader.result);reader.readAsDataURL(originalFile);});const i=document.querySelector('img');i.src=data;await i.decode();const nativeFetch=fetch;globalThis.fetch=(...args)=>new Promise(resolve=>setTimeout(()=>resolve(nativeFetch(...args)),700));return true;})()");
+        using (var cancelledProof = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
+        {
+            try
+            {
+                await adapter.SubmitAsync(cancelledProof.Token);
+                throw new InvalidOperationException("Local proof submission did not cancel.");
+            }
+            catch (OperationCanceledException)
+            {
+                Check(true, "cancellation while local hashing yields is checked again before any click");
+            }
+        }
+
+        Check((await Eval("globalThis.clicks===0 && globalThis.changes===1")).GetBoolean() &&
+            (await adapter.SubmitAsync()).Code == "input-not-prepared",
+            "cancelled local re-proof preserves the draft and consumes the one submit permit");
+
+        var oversizedImage = Path.Combine(directory, "synthetic-oversize.png");
+        await File.WriteAllBytesAsync(oversizedImage, new byte[20 * 1024 * 1024 + 1]);
+        await Fixture();
+        combined = await adapter.PrepareInputAsync(oversizedImage, message);
+        Check(combined.Code == "image-file-size-invalid" && (await Eval("globalThis.clicks===0 && globalThis.changes===0")).GetBoolean(),
+            "an oversized source File is rejected before selection, paste or submit");
+        File.Delete(oversizedImage);
     }
 }

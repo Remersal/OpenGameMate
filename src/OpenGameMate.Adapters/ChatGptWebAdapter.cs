@@ -917,6 +917,26 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
 
             if (decision == SubmitControlDecision.Invoke)
             {
+                var identityResult = await EvaluateAsync(
+                    $$"""
+                    (async () => {
+                      const composers = ogmComposers({{composerSelectorJson}});
+                      if (composers.length !== 1) return { code: 'composer-count-before-invoke' };
+                      const attachmentDiagnostics = ogmAttachmentDiagnostics(ogmScope(composers[0]));
+                      const code = await ogmVerifyPreparedLocalSource(composers[0]);
+                      return { code, attachmentDiagnostics };
+                    })()
+                    """);
+                cancellationToken.ThrowIfCancellationRequested();
+                var identityDiagnostics = ParseAttachmentDiagnostics(identityResult);
+                if (GetCode(identityResult) != "ok")
+                {
+                    return new(false, false, false, GetCode(identityResult), WebAdapterStatus.AdapterInvalid,
+                        adapterDiagnostics with { FailureStage = AdapterFailureStage.Invocation, Attachment = identityDiagnostics });
+                }
+
+                // Local hashing yields. Recheck audio immediately afterward,
+                // before the existing synchronous target/button/identity guard.
                 if (expectedAudioStateVersion is not null &&
                     !AudioGuardAllowsSubmit(expectedAudioStateVersion.Value, requiredSilentDuration))
                 {
@@ -978,7 +998,12 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                     """);
                 triggerInvoked = GetBoolean(invokeResult, "invoked");
                 submitCode = GetCode(invokeResult);
-                adapterDiagnostics = adapterDiagnostics with { Attachment = ParseAttachmentDiagnostics(invokeResult) };
+                var invocationDiagnostics = ParseAttachmentDiagnostics(invokeResult);
+                adapterDiagnostics = adapterDiagnostics with
+                {
+                    Attachment = triggerInvoked && identityDiagnostics is { SrcChanged: true }
+                        ? identityDiagnostics : invocationDiagnostics,
+                };
                 if (!triggerInvoked)
                 {
                     var invokeStatus = submitCode == "page-state-changed-before-invoke"
