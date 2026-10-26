@@ -1,11 +1,11 @@
 #define MyAppName "OpenGameMate"
 #ifndef MyAppVersion
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.1.1"
 #endif
 #define MyAppExeName "OpenGameMate.App.exe"
 #define MyAppIconName "OpenGameMate.AppIcon.2.ico"
 #ifndef MySourceDirectory
-#define MySourceDirectory "..\artifacts\release\OpenGameMate-v0.1.0-win-x64"
+#define MySourceDirectory "..\artifacts\release\OpenGameMate-v0.1.1-win-x64"
 #endif
 #ifndef MyInstallerOutputDirectory
 #define MyInstallerOutputDirectory "..\artifacts\installer"

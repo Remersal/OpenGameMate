@@ -13,14 +13,14 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Remersal/OpenGameMate" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/platform-Windows-0078D4?logo=windows11&amp;logoColor=white" alt="Windows">
   <img src="https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&amp;logoColor=white" alt=".NET 8">
-  <a href="https://github.com/Remersal/OpenGameMate/releases/tag/v0.1.0"><img src="https://img.shields.io/github/v/release/Remersal/OpenGameMate?include_prereleases&amp;label=release" alt="Latest Release"></a>
+  <a href="https://github.com/Remersal/OpenGameMate/releases/tag/v0.1.1"><img src="https://img.shields.io/github/v/release/Remersal/OpenGameMate?include_prereleases&amp;label=release" alt="Latest Release"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Setup-0.1.0.exe"><strong>Installer</strong></a> ·
-  <a href="https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-v0.1.0-win-x64.zip"><strong>Portable</strong></a> ·
+  <a href="https://github.com/Remersal/OpenGameMate/releases/download/v0.1.1/OpenGameMate-Setup-0.1.1.exe"><strong>Installer</strong></a> ·
+  <a href="https://github.com/Remersal/OpenGameMate/releases/download/v0.1.1/OpenGameMate-v0.1.1-win-x64.zip"><strong>Portable</strong></a> ·
   <a href="#demo"><strong>Demo</strong></a> ·
-  <a href="docs/RELEASE_NOTES_0.1.0.md"><strong>Documentation</strong></a> ·
+  <a href="docs/RELEASE_NOTES_0.1.1.md"><strong>Documentation</strong></a> ·
   <a href="README.zh-CN.md"><strong>简体中文</strong></a>
 </p>
 
@@ -52,12 +52,12 @@ The recordings show live gameplay, ChatGPT Voice, and OpenGameMate's screen-awar
 
 ## Download and quick start
 
-> **v0.1.0 Early Preview is available.** This is a public testing build, not a claim of universal compatibility.
+> **v0.1.1 Early Preview is available.** This is a public testing build, not a claim of universal compatibility.
 
-- [Download the Windows x64 installer](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Setup-0.1.0.exe)
-- [Download the Windows x64 portable ZIP](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-v0.1.0-win-x64.zip)
-- [View SHA-256 checksums](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/SHA256SUMS.txt)
-- [Read the GitHub Release](https://github.com/Remersal/OpenGameMate/releases/tag/v0.1.0)
+- [Download the Windows x64 installer](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.1/OpenGameMate-Setup-0.1.1.exe)
+- [Download the Windows x64 portable ZIP](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.1/OpenGameMate-v0.1.1-win-x64.zip)
+- [View SHA-256 checksums](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.1/SHA256SUMS.txt)
+- [Read the GitHub Release](https://github.com/Remersal/OpenGameMate/releases/tag/v0.1.1)
 
 The installer is currently **not Authenticode-signed**, so Windows may show an unknown-publisher or reputation warning. Installation also requires explicit acknowledgement of the possible game-account risk. The portable package is framework-dependent and requires .NET 8 Desktop Runtime and WebView2 Runtime.
 
@@ -102,7 +102,7 @@ Read the complete [Privacy Policy](PRIVACY.md) and [Security Policy](SECURITY.md
 - The built-in page rules are used while maintainer-owned signing trust anchors for remote rule updates are still being prepared.
 - Targeted live checks and user RC acceptance have passed, but public compatibility reports across more systems and games are still needed.
 
-See the [v0.1.0 Release Notes](docs/RELEASE_NOTES_0.1.0.md) and [test plan](docs/V0.1_TEST_PLAN.md) for the detailed evidence boundary.
+See the [v0.1.1 Release Notes](docs/RELEASE_NOTES_0.1.1.md) and [test plan](docs/V0.1_TEST_PLAN.md) for the detailed evidence boundary.
 
 ## Build from source
 
