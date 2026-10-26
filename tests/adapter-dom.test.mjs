@@ -387,6 +387,78 @@ test('replacing a prepared attachment cannot send a different attachment with th
   assert.equal((await probe('invoke')).invoked, false);
   assert.equal(await evaluate('globalThis.clicks'), 0);
 });
+test('same-content detached editor can rebind only within the same marked form and context', async () => {
+  await fixture(unified(unifiedEditor + send)); await prepareText();
+  await evaluate('document.querySelector("[role=textbox]").replaceWith(document.querySelector("[role=textbox]").cloneNode(true))');
+  assert.equal((await probe('invoke')).invoked, true);
+  assert.equal((await probe('invoke')).invoked, false);
+  assert.equal(await evaluate('globalThis.clicks'), 1);
+});
+test('text, form, route, connected editor and Voice changes produce bounded failure codes', async () => {
+  const cases = [
+    [`document.querySelector('[role=textbox]').textContent='different synthetic text'`, 'prepared-text-changed'],
+    [`(() => {const old=document.querySelector('form');const next=old.cloneNode(true);old.replaceWith(next);next.querySelector('button').onclick=()=>globalThis.clicks++;})()`, 'prepared-scope-changed'],
+    [`history.replaceState(null,'','/different-test-context')`, 'prepared-context-changed'],
+    [`(() => {const old=document.querySelector('[role=textbox]');const next=old.cloneNode(true);old.hidden=true;old.after(next);})()`, 'prepared-composer-changed'],
+    [`(() => {const b=document.createElement('button');b.type='button';b.setAttribute('aria-label','关闭麦克风');document.querySelector('form').append(b);})()`, 'prepared-voice-changed'],
+  ];
+  for (const [mutation, code] of cases) {
+    await fixture(unified(unifiedEditor + send)); await prepareText(); await evaluate(mutation);
+    assert.equal((await probe('invoke')).code, code);
+    assert.equal(await evaluate('globalThis.clicks'), 0);
+  }
+});
+async function prepareImmutableImage() {
+  await fixture(unified(unifiedEditor + send));
+  await probe('locate');
+  await evaluate(`(() => {const wrapper=document.createElement('div');wrapper.dataset.testid='attachment';wrapper.dataset.fileName='same-synthetic.png';
+    const image=document.createElement('img');image.width=64;image.height=36;image.src=${JSON.stringify('data:image/png;base64,' + imageBase64)};
+    const remove=document.createElement('button');remove.type='button';remove.dataset.testid='remove-file-button';
+    wrapper.append(image,remove);document.querySelector('form').append(wrapper);})()`);
+  await probe('insert', {allowPreparedAttachmentJson:'true'});
+  assert.equal((await probe('prepare')).previewDetected, true);
+}
+test('same immutable image leaf survives wrapper redraw with exactly one submit', async () => {
+  await prepareImmutableImage();
+  await evaluate('document.querySelector("[data-testid=attachment]").replaceWith(document.querySelector("[data-testid=attachment]").cloneNode(true))');
+  assert.equal((await probe('invoke')).invoked, true);
+  assert.equal(await evaluate('globalThis.clicks'), 1);
+});
+test('changed image source, same filename replacement, additions and removals never click', async () => {
+  const mutations = [
+    `document.querySelector('img').src='data:image/png;base64,DIFFERENT'`,
+    `(() => {const next=document.querySelector('[data-testid=attachment]').cloneNode(true);next.querySelector('img').src='data:image/png;base64,DIFFERENT';document.querySelector('[data-testid=attachment]').replaceWith(next);})()`,
+    `document.querySelector('form').append(document.querySelector('[data-testid=attachment]').cloneNode(true))`,
+    `document.querySelector('[data-testid=attachment]').remove()`,
+    `document.querySelector('img').src='https://chatgpt.com/accepted-test-image.png'`,
+    `document.querySelector('img').srcset='https://chatgpt.com/different-test-image.png 1x'`,
+  ];
+  for (const mutation of mutations) {
+    await prepareImmutableImage(); await evaluate(mutation);
+    assert.match((await probe('invoke')).code, /^prepared-attachment-/);
+    assert.equal(await evaluate('globalThis.clicks'), 0);
+  }
+});
+test('an opaque or mutable preview replacement is not content identity', async () => {
+  await fixture(unified(unifiedEditor + send)); await probe('locate');
+  await evaluate(`(() => {const i=document.createElement('img');i.width=64;i.height=36;i.src='https://chatgpt.com/test-image.png';document.querySelector('form').append(i);})()`);
+  await probe('insert', {allowPreparedAttachmentJson:'true'}); await probe('prepare');
+  await evaluate('document.querySelector("img").replaceWith(document.querySelector("img").cloneNode(true))');
+  assert.equal((await probe('invoke')).code, 'prepared-attachment-node-changed');
+  assert.equal(await evaluate('globalThis.clicks'), 0);
+});
+test('scoped microphone-off controls identify Voice read-only and suppress automatic preparation', async () => {
+  for (const label of ['关闭麦克风', 'Turn off microphone']) {
+    await fixture(unified(unifiedEditor + send + `<button type="button" aria-label="${label}">Voice control</button>`));
+    assert.equal((await probe('idle')).diagnostics.pageState, 'VoiceComposer');
+    await prepareText(); assert.equal((await probe('invoke')).invoked, true);
+  }
+});
+test('line ending normalization preserves exact logical text, without trimming edits', async () => {
+  await fixture(unified(unifiedEditor.replace('contenteditable="true"', 'contenteditable="true" style="white-space:pre-wrap"') + send));
+  assert.equal((await probe('insert', {messageJson:JSON.stringify('line one\r\nline two')})).textInserted, true);
+  assert.equal((await probe('invoke')).invoked, true);
+});
 test('disabled, hidden or ambiguous send controls and active stop controls never click', async () => {
   for (const buttons of [send + send, '<button disabled data-testid="send-button">Send</button>',
     '<button hidden data-testid="send-button">Send</button>', send + '<button data-testid="stop-button">Stop</button>']) {

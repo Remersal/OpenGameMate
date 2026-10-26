@@ -224,5 +224,37 @@ internal static class Program
         Check(submission.Status == WebAdapterStatus.Succeeded && submission.ComposerCleared && submission.AttachmentCleared,
             "asynchronous clearance after the former one-second deadline is observed without a second click");
         Check((await Eval("globalThis.clicks")).GetInt32() == 1, "post-submit observation polls never repeat the send");
+
+        await Fixture(pasteOnly: true);
+        await Eval("(() => {const form=document.querySelector('form');form.setAttribute('data-chatgpt-composer','');const editor=document.createElement('div');editor.contentEditable='true';editor.setAttribute('role','textbox');document.querySelector('textarea').replaceWith(editor);const mic=document.createElement('button');mic.type='button';mic.setAttribute('aria-label','关闭麦克风');form.append(mic);form.querySelector('[data-testid=send-button]').onclick=()=>{globalThis.clicks++;form.querySelector('[role=textbox]').replaceChildren();};return true;})()");
+        text = await adapter.PrepareTextAsync(message);
+        Check(text.Status == WebAdapterStatus.Succeeded, "marked Voice-like composer prepares synthetic role text");
+        await Eval("(() => {const e=document.querySelector('[role=textbox]');e.replaceWith(e.cloneNode(true));return true;})()");
+        submission = await adapter.SubmitAsync();
+        Check(submission.Status == WebAdapterStatus.Succeeded, "identical detached editor redraw in the same form remains prepared");
+        Check((await Eval("globalThis.clicks")).GetInt32() == 1 && (await adapter.SubmitAsync()).Code == "input-not-prepared",
+            "editor redraw does not grant a second submit permit");
+
+        var syntheticImageUri = JsonSerializer.Serialize("data:image/png;base64," + Convert.ToBase64String(await File.ReadAllBytesAsync(image)));
+        async Task PrepareImageLeafAsync()
+        {
+            await Fixture();
+            await Eval("document.querySelector('input').onchange=()=>{const wrapper=document.createElement('div');wrapper.dataset.testid='attachment';wrapper.dataset.fileName='same-synthetic.png';const img=document.createElement('img');img.width=64;img.height=36;img.src=" + syntheticImageUri + ";const remove=document.createElement('button');remove.type='button';remove.dataset.testid='remove-file-button';wrapper.append(img,remove);document.querySelector('form').append(wrapper);};");
+            var prepared = await adapter.PrepareInputAsync(image, message);
+            Check(prepared.Status == WebAdapterStatus.Succeeded, "synthetic immutable attachment leaf prepares through production C#");
+        }
+
+        await PrepareImageLeafAsync();
+        await Eval("(() => {const p=document.querySelector('[data-testid=attachment]');p.replaceWith(p.cloneNode(true));return true;})()");
+        Check((await adapter.SubmitAsync()).Status == WebAdapterStatus.Succeeded,
+            "same immutable attachment leaf survives wrapper redraw without changing the payload");
+
+        await PrepareImageLeafAsync();
+        await Eval("document.querySelector('img').src='data:image/png;base64,DIFFERENT'");
+        submission = await adapter.SubmitAsync();
+        Check(submission.Code == "prepared-attachment-source-changed" && !submission.TriggerInvoked,
+            "same-node image swap returns a bounded source-change code without clicking");
+        Check((await adapter.SubmitAsync()).Code == "input-not-prepared" && (await Eval("globalThis.clicks")).GetInt32() == 0,
+            "a rejected image swap cannot be retried using the consumed permit");
     }
 }

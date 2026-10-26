@@ -303,14 +303,14 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
               const actual = composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement
                 ? composer.value
                 : composer?.innerText;
-              if (ogmHasAttachment(scope) && (!{{expectTextJson}} || actual === {{messageJson}})) {
+              if (ogmHasAttachment(scope) && (!{{expectTextJson}} || ogmCanonicalText(actual) === ogmCanonicalText({{messageJson}}))) {
                 ogmRemember(composer);
               }
               return {
                 code: 'ok',
                 fileSelected: fileInput?.files?.length === 1,
                 previewDetected: ogmHasAttachment(scope),
-                textInserted: {{expectTextJson}} && actual === {{messageJson}},
+                textInserted: {{expectTextJson}} && ogmCanonicalText(actual) === ogmCanonicalText({{messageJson}}),
                 quotaDetected: quotaSelectors.some(selector => document.querySelector(selector)),
                 platformErrorDetected: platformErrorSelectors.some(selector => document.querySelector(selector))
               };
@@ -872,6 +872,8 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                       if (button.disabled || button.getAttribute('aria-disabled') === 'true') {
                         return { code: 'send-button-disabled-before-invoke', invoked: false };
                       }
+                      const preparedCode = ogmPreparedFailure(composers[0]);
+                      if (preparedCode !== 'ok') return { code: preparedCode, invoked: false };
                       const prepared = ogmPrepared(composers[0]);
                       if (!prepared || (!prepared.text && !prepared.hasAttachment)) {
                         return { code: 'prepared-input-changed', invoked: false };
@@ -1058,7 +1060,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
               if (!ogmCanInsertText(composer, {{allowPreparedAttachmentJson}})) {
                 return { code: 'composer-not-empty', textInserted: false };
               }
-              const text = {{messageJson}};
+              const text = ogmCanonicalText({{messageJson}});
               if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
                 const prototype = composer instanceof HTMLTextAreaElement
                   ? HTMLTextAreaElement.prototype
@@ -1083,11 +1085,12 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
               const actual = composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement
                 ? composer.value
                 : composer.innerText;
-              if (actual === text) ogmRemember(composer);
+              const matches = ogmCanonicalText(actual) === ogmCanonicalText(text);
+              if (matches) ogmRemember(composer);
               return {
-                code: actual === text ? 'ok' : 'text-not-observed',
+                code: matches ? 'ok' : 'text-not-observed',
                 fileSelected: fileInput?.files?.length === 1,
-                textInserted: actual === text
+                textInserted: matches
               };
             })()
             """);
