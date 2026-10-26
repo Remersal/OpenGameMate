@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 - 2026-10-26
+
+- Fixed screenshot sending and ChatGPT composer compatibility, including local PNG preview changes during attachment preparation and submission.
+- Preserved attachment identity, draft/context checks, Voice deferral, and at-most-once submission; expanded privacy-safe adapter diagnostics and isolated Edge/WebView2 regressions.
+- Real screenshot sending was manually verified by the user on the repaired build. Future ChatGPT interface updates may require another adapter update.
+
 ## 0.1.0 - 2026-07-14
 
 - Added modular .NET 8 WPF solution with Core, Configuration, Diagnostics, Browser, Capture, Adapters, and App modules.

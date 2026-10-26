@@ -13,14 +13,14 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/Remersal/OpenGameMate" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/platform-Windows-0078D4?logo=windows11&amp;logoColor=white" alt="Windows">
   <img src="https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&amp;logoColor=white" alt=".NET 8">
-  <a href="https://github.com/Remersal/OpenGameMate/releases/tag/v0.1.0"><img src="https://img.shields.io/github/v/release/Remersal/OpenGameMate?include_prereleases&amp;label=release" alt="最新版本"></a>
+  <a href="https://github.com/Remersal/OpenGameMate/releases/tag/v0.1.1"><img src="https://img.shields.io/github/v/release/Remersal/OpenGameMate?include_prereleases&amp;label=release" alt="最新版本"></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Setup-0.1.0.exe"><strong>安装版</strong></a> ·
-  <a href="https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-v0.1.0-win-x64.zip"><strong>便携版</strong></a> ·
+  <a href="https://github.com/Remersal/OpenGameMate/releases/download/v0.1.1/OpenGameMate-Setup-0.1.1.exe"><strong>安装版</strong></a> ·
+  <a href="https://github.com/Remersal/OpenGameMate/releases/download/v0.1.1/OpenGameMate-v0.1.1-win-x64.zip"><strong>便携版</strong></a> ·
   <a href="#实际效果与演示"><strong>演示</strong></a> ·
-  <a href="docs/RELEASE_NOTES_0.1.0.md"><strong>文档</strong></a> ·
+  <a href="docs/RELEASE_NOTES_0.1.1.md"><strong>文档</strong></a> ·
   <a href="README.md"><strong>English</strong></a>
 </p>
 
@@ -52,12 +52,12 @@
 
 ## 下载与快速开始
 
-> **v0.1.0 Early Preview 已可下载。** 这是早期公开测试版，不代表所有环境都能兼容。
+> **v0.1.1 Early Preview 已可下载。** 这是早期公开测试版，不代表所有环境都能兼容。
 
-- [下载 Windows x64 安装版](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-Setup-0.1.0.exe)
-- [下载 Windows x64 便携版 ZIP](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/OpenGameMate-v0.1.0-win-x64.zip)
-- [查看 SHA-256 校验值](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.0/SHA256SUMS.txt)
-- [查看 GitHub Release](https://github.com/Remersal/OpenGameMate/releases/tag/v0.1.0)
+- [下载 Windows x64 安装版](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.1/OpenGameMate-Setup-0.1.1.exe)
+- [下载 Windows x64 便携版 ZIP](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.1/OpenGameMate-v0.1.1-win-x64.zip)
+- [查看 SHA-256 校验值](https://github.com/Remersal/OpenGameMate/releases/download/v0.1.1/SHA256SUMS.txt)
+- [查看 GitHub Release](https://github.com/Remersal/OpenGameMate/releases/tag/v0.1.1)
 
 安装包目前**没有 Authenticode 数字签名**，Windows 可能显示未知发布者或信誉提示。安装时还必须明确确认可能存在的游戏账号风险。便携版依赖 .NET 8 Desktop Runtime 和 WebView2 Runtime。
 
@@ -102,7 +102,7 @@ ChatGPT 根据画面接话或主动开启新话题
 - 远程规则更新仍在等待维护者签名信任锚，当前使用内置网页规则。
 - 定向真实测试和用户 RC 验收已经通过，但仍需要收集更多系统与游戏的公开兼容性报告。
 
-详细证据边界请参阅 [v0.1.0 Release Notes](docs/RELEASE_NOTES_0.1.0.md) 和 [测试计划](docs/V0.1_TEST_PLAN.md)。
+详细证据边界请参阅 [v0.1.1 Release Notes](docs/RELEASE_NOTES_0.1.1.md) 和 [测试计划](docs/V0.1_TEST_PLAN.md)。
 
 ## 从源码构建
 

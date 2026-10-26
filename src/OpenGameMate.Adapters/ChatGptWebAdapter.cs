@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using OpenGameMate.Browser;
 using OpenGameMate.Core;
 
@@ -44,9 +45,13 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
     private const int MaximumDiagnosticButtonCandidates = 12;
     private const int MaximumDiagnosticScopeDepth = 8;
     private const int SubmitControlPollAttempts = 120;
+    private const int PostSubmitPollAttempts = 40;
     private const int SubmitControlPollIntervalMilliseconds = 250;
+    private const int UploadPollAttempts = 40;
     private const int MaximumMessageCharacters = 8000;
     private const long MaximumImageBytes = 20 * 1024 * 1024;
+    private static readonly string ComposerDomHelpers = LoadComposerDomHelpers();
+    private int _preparedSubmissionAvailable;
     private readonly ChatGptBrowserSession _session;
     private readonly ChatGptAdapterRules _rules;
 
@@ -65,6 +70,8 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         string message,
         CancellationToken cancellationToken = default)
     {
+        Interlocked.Exchange(ref _preparedSubmissionAvailable, 0);
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             return await PrepareInputCoreAsync(imagePath, message, insertText: true, cancellationToken);
@@ -79,12 +86,18 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         {
             return new(false, false, false, "adapter-operation-failed", WebAdapterStatus.AdapterInvalid);
         }
+        finally
+        {
+            await ReleaseUnfinishedUploadAsync();
+        }
     }
 
     public async Task<InputPreparationResult> PrepareImageAsync(
         string imagePath,
         CancellationToken cancellationToken = default)
     {
+        Interlocked.Exchange(ref _preparedSubmissionAvailable, 0);
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
             return await PrepareInputCoreAsync(imagePath, message: null, insertText: false, cancellationToken);
@@ -98,6 +111,10 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 UnauthorizedAccessException or COMException)
         {
             return new(false, false, false, "adapter-operation-failed", WebAdapterStatus.AdapterInvalid);
+        }
+        finally
+        {
+            await ReleaseUnfinishedUploadAsync();
         }
     }
 
@@ -129,6 +146,8 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         }
 
         var fileInputSelectorJson = JsonSerializer.Serialize(_rules.FileInputSelector);
+        var imageBytes = await File.ReadAllBytesAsync(imagePath, cancellationToken);
+        var imageDigestJson = JsonSerializer.Serialize(Convert.ToHexString(SHA256.HashData(imageBytes)).ToLowerInvariant());
         var composerSelectorJson = JsonSerializer.Serialize(_rules.ComposerSelector);
         var previewSelectorsJson = JsonSerializer.Serialize(_rules.AttachmentPreviewSelectors);
         var quotaSelectorsJson = JsonSerializer.Serialize(_rules.QuotaErrorSelectors);
@@ -140,20 +159,35 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
               if (!(location.hostname === 'chatgpt.com' || location.hostname.endsWith('.chatgpt.com'))) {
                 return { code: 'unexpected-origin', count: 0 };
               }
+              ogmStopUpload('abandoned');
+              globalThis[ogmPreparedKey] = null;
+              const composers = ogmComposers({{composerSelectorJson}});
+              if (composers.length !== 1) return { code: 'composer-count', count: composers.length };
+              const composer = composers[0];
+              const scope = ogmScope(composer);
+              if (!scope) return { code: 'composer-scope-missing', count: 0 };
+              if (ogmText(composer) || ogmHasAttachment(scope)) {
+                return { code: 'composer-not-empty', count: 0 };
+              }
+              ogmRemember(composer);
+              ogmBeginUpload(composer, {{imageDigestJson}}, {{imageLength}});
               document.querySelectorAll('input[{{FileInputMarker}}]')
                 .forEach(element => element.removeAttribute('{{FileInputMarker}}'));
-              const candidates = [...document.querySelectorAll({{fileInputSelectorJson}})]
-                .filter(element => !element.disabled &&
-                  (!element.accept || /image|png|jpe?g|gif/i.test(element.accept)));
+              const candidates = ogmFileInputs({{fileInputSelectorJson}}, scope);
               if (candidates.length !== 1) {
-                return { code: 'file-input-count', count: candidates.length };
+                return { code: candidates.length === 0 ? 'file-input-none' : 'file-input-ambiguous',
+                  count: candidates.length };
               }
               candidates[0].setAttribute('{{FileInputMarker}}', 'true');
+              globalThis[ogmPreparedKey].fileInput = candidates[0];
+              const upload = globalThis[ogmPreparedKey].upload;
+              const bind = () => upload.bind(candidates[0].files?.[0]);
+              candidates[0].addEventListener('input', bind, { capture: true });
+              upload.unbind = () => candidates[0].removeEventListener('input', bind, { capture: true });
               return { code: 'ok', count: 1 };
             })()
             """);
 
-        var attachmentMethod = "file-input";
         JsonElement attachmentResult;
         if (GetCode(locateFileInput) == "ok")
         {
@@ -172,6 +206,27 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 return new(false, false, false, "marked-file-input-not-found", WebAdapterStatus.AdapterInvalid);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+            var targetCheck = await EvaluateAsync(
+                $$"""
+                (() => {
+                  const composers = ogmComposers({{composerSelectorJson}});
+                  if (composers.length !== 1 || !ogmSamePreparationTarget(composers[0])) {
+                    return { code: 'preparation-target-changed' };
+                  }
+                  const inputs = ogmFileInputs({{fileInputSelectorJson}}, ogmScope(composers[0]));
+                  const marked = document.querySelectorAll('input[{{FileInputMarker}}="true"]');
+                  return { code: inputs.length === 1 && marked.length === 1 &&
+                    inputs[0] === marked[0] && inputs[0] === globalThis[ogmPreparedKey].fileInput
+                      ? 'file-input-target-checked' : 'preparation-target-changed' };
+                })()
+                """);
+            if (GetCode(targetCheck) != "file-input-target-checked")
+            {
+                return new(false, false, false, GetCode(targetCheck), WebAdapterStatus.NotReady);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
             using (await CallCdpAsync(
                 "DOM.setFileInputFiles",
                 new { files = new[] { Path.GetFullPath(imagePath) }, nodeId = fileNodeId }))
@@ -182,37 +237,42 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 $$"""
                 (() => {
                   const fileInput = document.querySelector('input[{{FileInputMarker}}="true"]');
-                  if (!fileInput) return { code: 'file-input-lost', fileSelected: false };
-                  fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-                  fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-                  return { code: 'file-input-events', fileSelected: fileInput.files?.length === 1 };
+                  const composers = ogmComposers({{composerSelectorJson}});
+                  if (!fileInput || composers.length !== 1 || !ogmSamePreparationTarget(composers[0])) {
+                    return { code: 'file-input-lost', fileSelected: false };
+                  }
+                  // DOM.setFileInputFiles already dispatches input/change in Chromium.
+                  return { code: 'file-input-selected', fileSelected: fileInput.files?.length === 1 };
                 })()
                 """);
         }
-        else if (GetCode(locateFileInput) == "file-input-count")
+        else if (GetCode(locateFileInput) is "file-input-none" or "file-input-ambiguous")
         {
-            // The current ChatGPT composer can omit a persistent file input. A paste event is
-            // the narrow fallback: it targets only the composer and never opens a native picker.
-            attachmentMethod = "composer-paste";
-            var imageBase64Json = JsonSerializer.Serialize(
-                Convert.ToBase64String(await File.ReadAllBytesAsync(imagePath, cancellationToken)));
+            // Never choose between ambiguous native inputs. The separate paste path targets
+            // only the same validated composer and still requires a visible accepted preview.
+            var imageBase64Json = JsonSerializer.Serialize(Convert.ToBase64String(imageBytes));
             attachmentResult = await EvaluateAsync(
                 $$"""
                 (async () => {
-                  const composers = [...document.querySelectorAll({{composerSelectorJson}})]
-                    .filter(element => !element.hasAttribute('disabled'));
+                  const composers = ogmComposers({{composerSelectorJson}});
                   if (composers.length !== 1) {
                     return { code: 'composer-count-before-paste', count: composers.length,
                       fileSelected: false };
                   }
 
+                  const target = composers[0];
+                  if (!ogmSamePreparationTarget(target) || ogmText(target) || ogmHasAttachment(ogmScope(target))) {
+                    return { code: 'composer-changed-before-paste', fileSelected: false };
+                  }
                   const binary = atob({{imageBase64Json}});
                   const bytes = new Uint8Array(binary.length);
                   for (let index = 0; index < binary.length; index++) {
                     bytes[index] = binary.charCodeAt(index);
                   }
                   const transfer = new DataTransfer();
-                  transfer.items.add(new File([bytes], 'opengamemate-screen.png', { type: 'image/png' }));
+                  const file = new File([bytes], 'opengamemate-screen.png', { type: 'image/png' });
+                  globalThis[ogmPreparedKey].upload.bind(file);
+                  transfer.items.add(file);
                   const pasteEvent = new ClipboardEvent('paste', {
                     bubbles: true,
                     cancelable: true,
@@ -223,34 +283,41 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                     Object.defineProperty(pasteEvent, 'clipboardData', { value: transfer });
                   }
                   composers[0].dispatchEvent(pasteEvent);
-                  await new Promise(resolve => setTimeout(resolve, 350));
                   return { code: 'paste-event-dispatched', fileSelected: false };
                 })()
                 """);
         }
         else
         {
-            return new(false, false, false, GetCode(locateFileInput), WebAdapterStatus.AdapterInvalid);
+            return new(false, false, false, GetPreparationCode(locateFileInput), WebAdapterStatus.AdapterInvalid);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         var inputFileSelected = false;
-        var inputTextInserted = false;
         if (insertText)
         {
-            var inputResult = await InsertTextAsync(message!, composerSelectorJson);
+            var inputResult = await InsertTextAsync(message!, composerSelectorJson, allowPreparedAttachment: true);
             inputFileSelected = GetBoolean(inputResult, "fileSelected");
-            inputTextInserted = GetBoolean(inputResult, "textInserted");
         }
 
-        await Task.Delay(750, cancellationToken);
         var messageJson = JsonSerializer.Serialize(message ?? string.Empty);
         var expectTextJson = insertText ? "true" : "false";
-        var probeResult = await EvaluateAsync(
+        JsonElement probeResult = default;
+        try
+        {
+            for (var attempt = 0; attempt < UploadPollAttempts; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                probeResult = await EvaluateAsync(
             $$"""
-            (() => {
+            (async () => {
               const fileInput = document.querySelector('input[{{FileInputMarker}}="true"]');
-              const composer = document.querySelector({{composerSelectorJson}});
-              const scope = composer?.closest('form') ?? document;
+              const composers = ogmComposers({{composerSelectorJson}});
+              const composer = composers.length === 1 ? composers[0] : null;
+              const scope = ogmScope(composer);
+              if (!scope) return { code: 'composer-scope-lost', fileSelected: false,
+                previewDetected: false, textInserted: false };
+              const uploadResult = await ogmPollUpload(composer);
               const previewSelectors = {{previewSelectorsJson}};
               const quotaSelectors = {{quotaSelectorsJson}};
               const platformErrorSelectors = {{platformErrorSelectorsJson}};
@@ -258,40 +325,118 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 ? composer.value
                 : composer?.innerText;
               return {
-                code: 'ok',
+                code: uploadResult.code,
+                pageState: ogmPageState(scope),
+                attachmentDiagnostics: ogmAttachmentDiagnostics(scope, true),
+                identityDiagnostics: ogmIdentityDiagnostics(globalThis[ogmPreparedKey]?.upload, scope, uploadResult.code),
                 fileSelected: fileInput?.files?.length === 1,
-                previewDetected: previewSelectors.some(selector => scope.querySelector(selector)) ||
-                  Boolean(scope.querySelector('img[src^="blob:"]')),
-                textInserted: {{expectTextJson}} && actual === {{messageJson}},
+                previewDetected: ogmHasAttachment(scope),
+                textInserted: {{expectTextJson}} && ogmCanonicalText(actual) === ogmCanonicalText({{messageJson}}),
                 quotaDetected: quotaSelectors.some(selector => document.querySelector(selector)),
                 platformErrorDetected: platformErrorSelectors.some(selector => document.querySelector(selector))
               };
             })()
             """);
+                if (GetCode(probeResult) != "attachment-upload-pending" ||
+                    GetBoolean(probeResult, "quotaDetected") || GetBoolean(probeResult, "platformErrorDetected"))
+                {
+                    break;
+                }
+
+                if (attempt < UploadPollAttempts - 1)
+                {
+                    await Task.Delay(SubmitControlPollIntervalMilliseconds, cancellationToken);
+                }
+            }
+        }
+        finally
+        {
+            // On cancellation or timeout keep the user's draft, revoke the permit
+            // and release the bounded observer/File reference. Never paste again.
+            await ReleaseUnfinishedUploadAsync();
+        }
+
+        if (GetCode(probeResult) == "attachment-upload-pending")
+        {
+            var timeoutResult = await EvaluateAsync(
+                "({ code: globalThis[ogmPreparedKey]?.upload?.timeoutCode ?? 'attachment-upload-timeout' })");
+            probeResult = JsonSerializer.SerializeToElement(new
+            {
+                code = GetCode(timeoutResult),
+                fileSelected = GetBoolean(probeResult, "fileSelected"),
+                previewDetected = GetBoolean(probeResult, "previewDetected"),
+                textInserted = GetBoolean(probeResult, "textInserted"),
+                attachmentDiagnostics = probeResult.GetProperty("attachmentDiagnostics"),
+                identityDiagnostics = probeResult.GetProperty("identityDiagnostics"),
+                pageState = probeResult.GetProperty("pageState"),
+            });
+        }
 
         var fileSelected = GetBoolean(probeResult, "fileSelected") ||
             inputFileSelected ||
             GetBoolean(attachmentResult, "fileSelected");
         var previewDetected = GetBoolean(probeResult, "previewDetected");
-        var textInserted = GetBoolean(probeResult, "textInserted") ||
-            inputTextInserted;
-        var status = ClassifyPreparationProbe(
-            fileSelected || previewDetected,
+        var textInserted = GetBoolean(probeResult, "textInserted");
+        var status = GetCode(probeResult) == "preparation-target-changed"
+            ? WebAdapterStatus.NotReady
+            : ClassifyPreparationProbe(
+            previewDetected,
             insertText ? textInserted : true,
             GetBoolean(probeResult, "quotaDetected"),
             GetBoolean(probeResult, "platformErrorDetected"));
-        return new(
-            fileSelected,
-            previewDetected,
-            textInserted,
-            $"{attachmentMethod}:{GetCode(attachmentResult)}:{GetCode(probeResult)}",
-            status);
+        if (status == WebAdapterStatus.Succeeded && GetCode(probeResult) != "ok")
+        {
+            status = WebAdapterStatus.AdapterInvalid;
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        Interlocked.Exchange(ref _preparedSubmissionAvailable, status == WebAdapterStatus.Succeeded ? 1 : 0);
+        var preparationCode = status switch
+        {
+            WebAdapterStatus.Succeeded => "ok",
+            WebAdapterStatus.NotReady => "preparation-target-changed",
+            WebAdapterStatus.QuotaReached => "quota-detected",
+            WebAdapterStatus.PlatformError => "platform-error-detected",
+            _ => GetCode(probeResult) != "ok" ? GetPreparationCode(probeResult)
+                : !previewDetected ? "attachment-not-observed"
+                : insertText && !textInserted ? "text-not-observed" : "preparation-failed",
+        };
+        return new(fileSelected, previewDetected, textInserted, preparationCode, status,
+            new AdapterDiagnostics(TryReadEnum(probeResult, "pageState", AdapterPageState.Unknown), 0, [],
+                status == WebAdapterStatus.Succeeded ? AdapterFailureStage.None : AdapterFailureStage.AttachmentPreparation,
+                ParseAttachmentDiagnostics(probeResult), ParseIdentityDiagnostics(probeResult)));
+    }
+
+    private async Task ReleaseUnfinishedUploadAsync()
+    {
+        if (!_session.IsInitialized || !_session.IsOnChatGpt())
+        {
+            return;
+        }
+
+        try
+        {
+            await EvaluateAsync(
+                "(() => { const upload = globalThis[ogmPreparedKey]?.upload; " +
+                "if (upload?.phase === 'uploading') { upload.timeoutCode = upload.failure ?? " +
+                "(!upload.seenImage ? (ogmHasAttachment(globalThis[ogmPreparedKey].scope) ? " +
+                "'attachment-content-unverifiable' : 'attachment-not-observed') : !upload.sawBusy ? " +
+                "'attachment-completion-unobserved' : 'attachment-upload-timeout'); ogmStopUpload('failed'); } " +
+                "return { code: 'upload-observation-released' }; })()");
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or JsonException or COMException)
+        {
+            // A detached/navigated document owns no submit permit. Cleanup must
+            // not hide the original failure or cancellation from the caller.
+        }
     }
 
     public async Task<TextPreparationResult> PrepareTextAsync(
         string message,
         CancellationToken cancellationToken = default)
     {
+        var allowPreparedAttachment = Interlocked.Exchange(ref _preparedSubmissionAvailable, 0) == 1;
+        cancellationToken.ThrowIfCancellationRequested();
         if (!_session.IsInitialized || !_session.IsOnChatGpt())
         {
             return new(false, "not-on-chatgpt", WebAdapterStatus.NotReady);
@@ -305,12 +450,16 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         try
         {
             var composerSelectorJson = JsonSerializer.Serialize(_rules.ComposerSelector);
-            var result = await InsertTextAsync(message, composerSelectorJson);
+            var result = await InsertTextAsync(message, composerSelectorJson, allowPreparedAttachment);
+            cancellationToken.ThrowIfCancellationRequested();
             var inserted = GetBoolean(result, "textInserted");
+            Interlocked.Exchange(ref _preparedSubmissionAvailable, inserted ? 1 : 0);
             return new(
                 inserted,
-                GetCode(result),
-                inserted ? WebAdapterStatus.Succeeded : WebAdapterStatus.AdapterInvalid);
+                GetPreparationCode(result),
+                inserted ? WebAdapterStatus.Succeeded
+                    : GetCode(result) == "preparation-target-changed"
+                        ? WebAdapterStatus.NotReady : WebAdapterStatus.AdapterInvalid);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -353,26 +502,27 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                         candidateButtons: [], failureStage: 'Readiness' } };
                   }
 
-                  const composers = [...document.querySelectorAll({{composerSelectorJson}})]
-                    .filter(element => !element.hasAttribute('disabled'));
+                  const composers = ogmComposers({{composerSelectorJson}});
                   const composer = composers.length === 1 ? composers[0] : null;
-                  const form = composer?.closest('form') ?? null;
-                  const stopButtons = [...document.querySelectorAll({{busyButtonSelectorJson}})];
+                  const form = ogmScope(composer);
+                  const stopButtons = [...document.querySelectorAll({{busyButtonSelectorJson}})].filter(ogmVisible);
                   const sendButtons = form
-                    ? [...form.querySelectorAll({{sendButtonSelectorJson}})]
+                    ? [...form.querySelectorAll({{sendButtonSelectorJson}})].filter(button => ogmOwnedButton(button, form))
                     : [];
                   const sendDisabled = sendButtons.length === 1 &&
                     (sendButtons[0].disabled ||
                       sendButtons[0].getAttribute('aria-disabled') === 'true');
                   const attachmentSelectors = {{attachmentPreviewSelectorsJson}};
-                  const hasAttachment = Boolean(form) &&
-                    (attachmentSelectors.some(selector => form.querySelector(selector)) ||
-                      Boolean(form.querySelector('img[src^="blob:"]')));
+                  const hasAttachment = ogmHasAttachment(form);
                   const activeVoiceSelector =
                     'button[data-testid="end-voice-mode-button"],' +
                     '[data-testid="voice-mode-composer"]';
-                  const hasVoiceControl = Boolean(document.querySelector(activeVoiceSelector));
-                  const pageState = hasVoiceControl
+                  const hasVoiceControl = ogmVoice();
+                  // An empty unified composer can replace submit with an unclassified activity
+                  // control. Keep automatic preparation closed until send readiness is explicit.
+                  const unclassifiedUnifiedState = form?.hasAttribute('data-chatgpt-composer') &&
+                    sendButtons.length === 0 && !hasVoiceControl;
+                  const pageState = composers.length !== 1 || !form || unclassifiedUnifiedState ? 'Unknown' : hasVoiceControl
                     ? (hasAttachment ? 'VoiceComposerWithAttachment' : 'VoiceComposer')
                     : (hasAttachment ? 'ComposerWithAttachment' : 'Composer');
                   const allFormButtons = form ? [...form.querySelectorAll('button')] : [];
@@ -561,6 +711,8 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         AdapterPageState? expectedPageState,
         CancellationToken cancellationToken)
     {
+        var preparedSubmissionAvailable = Interlocked.Exchange(ref _preparedSubmissionAvailable, 0) == 1;
+        cancellationToken.ThrowIfCancellationRequested();
         if (!_session.IsInitialized || !_session.IsOnChatGpt())
         {
             return new(
@@ -574,6 +726,11 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                     0,
                     [],
                     AdapterFailureStage.Readiness));
+        }
+
+        if (!preparedSubmissionAvailable)
+        {
+            return new(false, false, false, "input-not-prepared", WebAdapterStatus.AdapterInvalid);
         }
 
         var sendButtonSelectorJson = JsonSerializer.Serialize(_rules.SendButtonSelector);
@@ -621,8 +778,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                   diagnostics: emptyDiagnostics('Readiness') };
               }
 
-              const composers = [...document.querySelectorAll({{composerSelectorJson}})]
-                .filter(element => !element.hasAttribute('disabled'));
+              const composers = ogmComposers({{composerSelectorJson}});
               if (composers.length !== 1) {
                 return { code: 'composer-count-before-submit',
                   sendButtonCount: 0, sendDisabled: false, busyButtonCount: 0,
@@ -630,7 +786,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
               }
 
               const composer = composers[0];
-              const scope = composer.closest('form');
+              const scope = ogmScope(composer);
               if (!scope) {
                 return { code: 'composer-form-missing',
                   sendButtonCount: 0, sendDisabled: false, busyButtonCount: 0,
@@ -638,8 +794,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
               }
 
               const attachmentSelectors = {{attachmentPreviewSelectorsJson}};
-              const hasAttachment = attachmentSelectors.some(selector => scope.querySelector(selector)) ||
-                Boolean(scope.querySelector('img[src^="blob:"]'));
+              const hasAttachment = ogmHasAttachment(scope);
               const distanceFromScope = element => {
                 const scopeAncestors = new Map();
                 let current = scope;
@@ -657,22 +812,20 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 }
                 return {{MaximumDiagnosticScopeDepth + 1}};
               };
-              const allButtons = [...scope.querySelectorAll('button')];
+              const allButtons = [...scope.querySelectorAll('button')].filter(button => ogmOwnedButton(button, scope));
               const discoveredButtons = allButtons.map(button => ({ button, scopeDepth: 0 }));
               const seenButtons = new Set(allButtons);
               for (const button of document.querySelectorAll(
                 {{busyButtonSelectorJson}} + ',' + {{sendButtonSelectorJson}})) {
+                if (!ogmVisible(button)) continue;
                 const scopeDepth = distanceFromScope(button);
                 if (scopeDepth <= {{MaximumDiagnosticScopeDepth}} && !seenButtons.has(button)) {
                   seenButtons.add(button);
                   discoveredButtons.push({ button, scopeDepth });
                 }
               }
-              const busyButtons = [...document.querySelectorAll({{busyButtonSelectorJson}})]
-                .filter(button => distanceFromScope(button) <= {{MaximumDiagnosticScopeDepth}});
-              const hasVoiceControl = busyButtons.length === 1 || Boolean(scope.querySelector(
-                'button[data-testid="voice-mode-button"],button[data-testid="end-voice-mode-button"],' +
-                '[data-testid="voice-mode-composer"]'));
+              const busyButtons = [...document.querySelectorAll({{busyButtonSelectorJson}})].filter(ogmVisible);
+              const hasVoiceControl = ogmVoice();
               const pageState = hasVoiceControl
                 ? (hasAttachment ? 'VoiceComposerWithAttachment' : 'VoiceComposer')
                 : (hasAttachment ? 'ComposerWithAttachment' : 'Composer');
@@ -692,7 +845,8 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 pageState,
                 detectedButtonCount: discoveredButtons.length,
                 candidateButtons,
-                failureStage
+                failureStage,
+                attachment: ogmAttachmentDiagnostics(scope)
               });
               const buttons = allButtons.filter(button => button.matches({{sendButtonSelectorJson}}));
               const sendDisabled = buttons.length === 1 &&
@@ -765,6 +919,37 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
 
             if (decision == SubmitControlDecision.Invoke)
             {
+                var identityResult = await EvaluateAsync(
+                    $$"""
+                    (async () => {
+                      const composers = ogmComposers({{composerSelectorJson}});
+                      if (composers.length !== 1) return { code: 'composer-count-before-invoke' };
+                      const before = ogmAttachmentDiagnostics(ogmScope(composers[0]));
+                      const upload = globalThis[ogmPreparedKey]?.upload;
+                      const proofBefore = upload?.lastProof;
+                      const code = await ogmVerifyPreparedLocalSource(composers[0]);
+                      const afterComposers = ogmComposers({{composerSelectorJson}});
+                      const scope = afterComposers.length === 1 ? ogmScope(afterComposers[0]) : null;
+                      const after = ogmAttachmentDiagnostics(scope);
+                      const attachmentDiagnostics = { ...after, beforeCount: before.beforeCount,
+                        beforeSrc: before.beforeSrc, beforeSrcSet: before.beforeSrcSet, beforeCurrentSrc: before.beforeCurrentSrc,
+                        srcChanged: before.srcChanged || after.srcChanged, srcSetChanged: before.srcSetChanged || after.srcSetChanged,
+                        currentSrcChanged: before.currentSrcChanged || after.currentSrcChanged };
+                      return { code, attachmentDiagnostics,
+                        identityDiagnostics: ogmIdentityDiagnostics(upload, scope, code, upload?.lastProof !== proofBefore) };
+                    })()
+                    """);
+                cancellationToken.ThrowIfCancellationRequested();
+                var identityDiagnostics = ParseAttachmentDiagnostics(identityResult);
+                adapterDiagnostics = adapterDiagnostics with { Identity = ParseIdentityDiagnostics(identityResult) };
+                if (GetCode(identityResult) != "ok")
+                {
+                    return new(false, false, false, GetCode(identityResult), WebAdapterStatus.AdapterInvalid,
+                        adapterDiagnostics with { FailureStage = AdapterFailureStage.Invocation, Attachment = identityDiagnostics });
+                }
+
+                // Local hashing yields. Recheck audio immediately afterward,
+                // before the existing synchronous target/button/identity guard.
                 if (expectedAudioStateVersion is not null &&
                     !AudioGuardAllowsSubmit(expectedAudioStateVersion.Value, requiredSilentDuration))
                 {
@@ -780,19 +965,19 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 var invokeResult = await EvaluateAsync(
                     $$"""
                     (() => {
-                      const composers = [...document.querySelectorAll({{composerSelectorJson}})]
-                        .filter(element => !element.hasAttribute('disabled'));
+                      const diagnosticComposers = ogmComposers({{composerSelectorJson}});
+                      const attachmentDiagnostics = ogmAttachmentDiagnostics(
+                        diagnosticComposers.length === 1 ? ogmScope(diagnosticComposers[0]) : null);
+                      const result = (() => {
+                      const composers = ogmComposers({{composerSelectorJson}});
                       if (composers.length !== 1) return { code: 'composer-count-before-invoke', invoked: false };
-                      const scope = composers[0].closest('form');
+                      const scope = ogmScope(composers[0]);
                       if (!scope) return { code: 'composer-form-missing-before-invoke', invoked: false };
-                      const busyButtons = [...document.querySelectorAll({{busyButtonSelectorJson}})];
-                      const buttons = [...scope.querySelectorAll({{sendButtonSelectorJson}})];
+                      const busyButtons = [...document.querySelectorAll({{busyButtonSelectorJson}})].filter(ogmVisible);
+                      const buttons = [...scope.querySelectorAll({{sendButtonSelectorJson}})].filter(button => ogmOwnedButton(button, scope));
                       const attachmentSelectors = {{attachmentPreviewSelectorsJson}};
-                      const hasAttachment = attachmentSelectors.some(selector => scope.querySelector(selector)) ||
-                        Boolean(scope.querySelector('img[src^="blob:"]'));
-                      const hasVoiceControl = busyButtons.length === 1 || Boolean(scope.querySelector(
-                        'button[data-testid="voice-mode-button"],button[data-testid="end-voice-mode-button"],' +
-                        '[data-testid="voice-mode-composer"]'));
+                      const hasAttachment = ogmHasAttachment(scope);
+                      const hasVoiceControl = ogmVoice();
                       const pageState = hasVoiceControl
                         ? (hasAttachment ? 'VoiceComposerWithAttachment' : 'VoiceComposer')
                         : (hasAttachment ? 'ComposerWithAttachment' : 'Composer');
@@ -810,12 +995,28 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                       if (button.disabled || button.getAttribute('aria-disabled') === 'true') {
                         return { code: 'send-button-disabled-before-invoke', invoked: false };
                       }
+                      const preparedCode = ogmPreparedFailure(composers[0]);
+                      if (preparedCode !== 'ok') return { code: preparedCode, invoked: false };
+                      const prepared = ogmPrepared(composers[0]);
+                      if (!prepared || (!prepared.text && !prepared.hasAttachment)) {
+                        return { code: 'prepared-input-changed', invoked: false };
+                      }
+                      prepared.used = true;
+                      prepared.invoked = true;
                       button.click();
                       return { code: 'ok', invoked: true };
+                      })();
+                      return { ...result, attachmentDiagnostics };
                     })()
                     """);
                 triggerInvoked = GetBoolean(invokeResult, "invoked");
                 submitCode = GetCode(invokeResult);
+                var invocationDiagnostics = ParseAttachmentDiagnostics(invokeResult);
+                adapterDiagnostics = adapterDiagnostics with
+                {
+                    Attachment = triggerInvoked && identityDiagnostics is { SrcChanged: true }
+                        ? identityDiagnostics : invocationDiagnostics,
+                };
                 if (!triggerInvoked)
                 {
                     var invokeStatus = submitCode == "page-state-changed-before-invoke"
@@ -851,26 +1052,43 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             await Task.Delay(SubmitControlPollIntervalMilliseconds, cancellationToken);
         }
 
-        await Task.Delay(1000, cancellationToken);
-        var stateResult = await EvaluateAsync(
+        JsonElement stateResult = default;
+        for (var attempt = 0; attempt < PostSubmitPollAttempts; attempt++)
+        {
+            if (attempt > 0)
+            {
+                await Task.Delay(SubmitControlPollIntervalMilliseconds, cancellationToken);
+            }
+
+            stateResult = await EvaluateAsync(
             $$"""
             (() => {
-              const composer = document.querySelector({{composerSelectorJson}});
-              const fileInput = document.querySelector('input[{{FileInputMarker}}="true"]');
-              const quotaSelectors = {{quotaSelectorsJson}};
-              const platformErrorSelectors = {{platformErrorSelectorsJson}};
-              const text = composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement
-                ? composer.value
-                : composer?.innerText;
+              const composers = ogmComposers({{composerSelectorJson}});
+              const composer = composers.length === 1 ? composers[0] : null;
+              const prepared = globalThis[ogmPreparedKey];
+              const sameScope = Boolean(composer && prepared?.invoked &&
+                prepared.composer === composer && prepared.scope === ogmScope(composer) &&
+                prepared.voice === ogmVoice());
+              const composerCleared = sameScope && Boolean(prepared.text) && !ogmText(composer);
+              const attachmentCleared = sameScope && prepared.hasAttachment &&
+                !ogmHasAttachment(prepared.scope);
               return {
-                code: 'ok',
-                composerCleared: !text,
-                attachmentCleared: !fileInput || !fileInput.files || fileInput.files.length === 0,
-                quotaDetected: quotaSelectors.some(selector => document.querySelector(selector)),
-                platformErrorDetected: platformErrorSelectors.some(selector => document.querySelector(selector))
+                code: sameScope ? 'ok' : 'submission-scope-changed',
+                composerCleared,
+                attachmentCleared,
+                submissionObserved: sameScope && Boolean(prepared.text || prepared.hasAttachment) &&
+                  (!prepared.text || composerCleared) && (!prepared.hasAttachment || attachmentCleared),
+                quotaDetected: {{quotaSelectorsJson}}.some(selector => document.querySelector(selector)),
+                platformErrorDetected: {{platformErrorSelectorsJson}}.some(selector => document.querySelector(selector))
               };
             })()
             """);
+            if (GetCode(stateResult) != "ok" || GetBoolean(stateResult, "submissionObserved") ||
+                GetBoolean(stateResult, "quotaDetected") || GetBoolean(stateResult, "platformErrorDetected"))
+            {
+                break;
+            }
+        }
 
         var quotaDetected = GetBoolean(stateResult, "quotaDetected");
         var platformErrorDetected = GetBoolean(stateResult, "platformErrorDetected");
@@ -880,14 +1098,15 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             ? WebAdapterStatus.QuotaReached
             : platformErrorDetected
                 ? WebAdapterStatus.PlatformError
-                : composerCleared || attachmentCleared
+                : GetBoolean(stateResult, "submissionObserved")
                     ? WebAdapterStatus.Succeeded
                     : WebAdapterStatus.AdapterInvalid;
         var code = status switch
         {
             WebAdapterStatus.QuotaReached => "quota-detected",
             WebAdapterStatus.PlatformError => "platform-error-detected",
-            WebAdapterStatus.AdapterInvalid => "submission-state-not-observed",
+            WebAdapterStatus.AdapterInvalid => GetCode(stateResult) == "ok"
+                ? "submission-state-not-observed" : GetCode(stateResult),
             _ => GetCode(stateResult),
         };
 
@@ -918,30 +1137,61 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         AdapterPageState? expectedPageState) =>
         expectedPageState is null || currentPageState == expectedPageState;
 
+    private static string LoadComposerDomHelpers()
+    {
+        using var stream = typeof(ChatGptWebAdapter).Assembly.GetManifestResourceStream(
+            "OpenGameMate.Adapters.ChatGptComposerDom.js")
+            ?? throw new InvalidOperationException("Composer helpers are missing.");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
     private async Task<JsonElement> EvaluateAsync(string expression)
     {
+        var attachmentSelectorsJson = JsonSerializer.Serialize(_rules.AttachmentPreviewSelectors);
+        expression = $$"""
+            (() => {
+              if (location.protocol !== 'https:' || (location.port && location.port !== '443') ||
+                !(location.hostname === 'chatgpt.com' || location.hostname.endsWith('.chatgpt.com'))) {
+                return { code: 'unexpected-origin' };
+              }
+              const ogmAttachmentSelectors = {{attachmentSelectorsJson}};
+              {{ComposerDomHelpers}}
+              return ({{expression}});
+            })()
+            """;
         using var response = await CallCdpAsync(
             "Runtime.evaluate",
             new { expression, returnByValue = true, awaitPromise = true });
         return ParseRuntimeEvaluateResponse(response.RootElement);
     }
 
-    private async Task<JsonElement> InsertTextAsync(string message, string composerSelectorJson)
+    private async Task<JsonElement> InsertTextAsync(
+        string message,
+        string composerSelectorJson,
+        bool allowPreparedAttachment = false)
     {
         var messageJson = JsonSerializer.Serialize(message);
+        var allowPreparedAttachmentJson = allowPreparedAttachment ? "true" : "false";
         return await EvaluateAsync(
             $$"""
             (() => {
               const fileInput = document.querySelector('input[{{FileInputMarker}}="true"]');
-              const composers = [...document.querySelectorAll({{composerSelectorJson}})]
-                .filter(element => !element.hasAttribute('disabled'));
+              const composers = ogmComposers({{composerSelectorJson}});
               if (composers.length !== 1) {
                 return { code: 'composer-count', count: composers.length,
                   fileSelected: fileInput?.files?.length === 1, textInserted: false };
               }
 
               const composer = composers[0];
-              const text = {{messageJson}};
+              if (!ogmScope(composer)) return { code: 'composer-scope-missing', textInserted: false };
+              if ({{allowPreparedAttachmentJson}} && !ogmSamePreparationTarget(composer)) {
+                return { code: 'preparation-target-changed', textInserted: false };
+              }
+              if (!ogmCanInsertText(composer, {{allowPreparedAttachmentJson}})) {
+                return { code: 'composer-not-empty', textInserted: false };
+              }
+              const text = ogmCanonicalText({{messageJson}});
               if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
                 const prototype = composer instanceof HTMLTextAreaElement
                   ? HTMLTextAreaElement.prototype
@@ -966,10 +1216,12 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
               const actual = composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement
                 ? composer.value
                 : composer.innerText;
+              const matches = ogmCanonicalText(actual) === ogmCanonicalText(text);
+              if (matches) ogmRemember(composer, {{allowPreparedAttachmentJson}});
               return {
-                code: 'ok',
+                code: matches ? 'ok' : 'text-not-observed',
                 fileSelected: fileInput?.files?.length === 1,
-                textInserted: actual === text
+                textInserted: matches
               };
             })()
             """);
@@ -1069,7 +1321,56 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
             }
         }
 
-        return new(pageState, detectedButtonCount, candidates, failureStage);
+        return new(pageState, detectedButtonCount, candidates, failureStage, ParseAttachmentDiagnostics(diagnostics, "attachment"));
+    }
+
+    public static AdapterAttachmentDiagnostics? ParseAttachmentDiagnostics(
+        JsonElement result,
+        string propertyName = "attachmentDiagnostics")
+    {
+        if (!result.TryGetProperty(propertyName, out var value) || value.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        AttachmentSourceKind Kind(string name)
+        {
+            var kind = TryReadEnum(value, name, AttachmentSourceKind.Unknown);
+            return Enum.IsDefined(kind) ? kind : AttachmentSourceKind.Unknown;
+        }
+
+        var phase = TryReadEnum(value, "uploadPhase", AttachmentUploadPhase.Unknown);
+        return new(
+            ReadBoundedInteger(value, "beforeCount", 0, 99), ReadBoundedInteger(value, "afterCount", 0, 99),
+            Kind("beforeSrc"), Kind("afterSrc"), Kind("beforeSrcSet"), Kind("afterSrcSet"),
+            Kind("beforeCurrentSrc"), Kind("afterCurrentSrc"),
+            GetBoolean(value, "srcChanged"), GetBoolean(value, "srcSetChanged"), GetBoolean(value, "currentSrcChanged"),
+            value.TryGetProperty("ariaBusy", out var busy) && busy.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? busy.GetBoolean() : null,
+            GetBoolean(value, "progressBarVisible"), GetBoolean(value, "busyObserved"), GetBoolean(value, "completionObserved"),
+            Enum.IsDefined(phase) ? phase : AttachmentUploadPhase.Unknown);
+    }
+
+    public static AdapterIdentityDiagnostics? ParseIdentityDiagnostics(JsonElement result)
+    {
+        if (!result.TryGetProperty("identityDiagnostics", out var value) || value.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        T Read<T>(string name, T fallback) where T : struct, Enum
+        {
+            var parsed = TryReadEnum(value, name, fallback);
+            return Enum.IsDefined(parsed) ? parsed : fallback;
+        }
+
+        return new(Read("mime", IdentityMimeKind.Unknown), Read("stage", IdentityStage.NotStarted),
+            Read("result", IdentityResult.NotChecked), Read("sourceRejectReason", IdentitySourceReject.None),
+            Read("proofFailure", IdentityProofFailure.None), Read("exceptionKind", IdentityExceptionKind.Other),
+            Read("duration", IdentityDurationBucket.None), ReadBoundedInteger(value, "sourceCount", 0, 99),
+            value.TryGetProperty("dimensionsEqual", out var dimensions) && dimensions.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? dimensions.GetBoolean() : null,
+            GetBoolean(value, "originalFileVerified"));
     }
 
     private static JsonElement ParseRuntimeEvaluateResponse(JsonElement response)
@@ -1100,6 +1401,14 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         element.TryGetProperty("code", out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() ?? "unknown"
             : "unknown";
+
+    private static string GetPreparationCode(JsonElement element)
+    {
+        var code = GetCode(element);
+        return element.TryGetProperty("count", out var count) && count.TryGetInt32(out var value)
+            ? $"{code}-c{Math.Clamp(value, 0, 999)}"
+            : code;
+    }
 
     private static bool GetBoolean(JsonElement element, string propertyName) =>
         element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.True;
