@@ -87,13 +87,18 @@ async function evaluate(expression) {
   return result.result.value;
 }
 async function probe(name, overrides) {
+  let checkedIdentity;
   if (name === 'invoke') {
     const identity = await probe('verifySource', overrides);
     if (identity.code !== 'ok') return { ...identity, invoked: false };
+    checkedIdentity = identity;
   }
   let result;
   for (let attempt = 0; attempt < 80; attempt++) {
     result = await evaluate(render(wrapper, { expression: render(probes[name], overrides) }));
+    if (name === 'invoke') result = { ...result, identityDiagnostics: checkedIdentity.identityDiagnostics,
+      attachmentDiagnostics: result.invoked && checkedIdentity.attachmentDiagnostics?.srcChanged
+        ? checkedIdentity.attachmentDiagnostics : result.attachmentDiagnostics };
     if (name !== 'prepare' || result.code !== 'attachment-upload-pending') return result;
     await delay(50);
   }
@@ -113,6 +118,7 @@ async function fixture(html = form()) {
   await cdp('Page.setDocumentContent', { frameId, html: '<!doctype html><html><body>' + html + '</body></html>' });
   await evaluate('globalThis.__openGameMatePreparedV1 = null; globalThis.clicks = 0; globalThis.changes = 0;');
   await evaluate('globalThis.fixtureFetch ??= fetch; globalThis.fetch = globalThis.fixtureFetch;');
+  await evaluate('globalThis.fixtureDigest ??= crypto.subtle.digest.bind(crypto.subtle); crypto.subtle.digest=fixtureDigest;');
   await evaluate(`document.querySelectorAll('[data-testid="send-button"]').forEach(b => b.onclick = () => globalThis.clicks++);`);
   await evaluate(receiver);
 }
@@ -618,8 +624,8 @@ test('text, form, route and Voice changes during late local content proof never 
   ]) {
     await startDelayedUpload(`globalThis.originalFile=file;`, false); assert.equal((await probe('prepare')).code, 'ok');
     await evaluate(`(async()=>{const reader=new FileReader();const data=await new Promise(resolve=>{reader.onload=()=>resolve(reader.result);reader.readAsDataURL(originalFile);});
-      const i=document.querySelector('img');i.src=data;await i.decode();const originalFetch=fetch;
-      globalThis.fetch=(...args)=>new Promise(resolve=>setTimeout(()=>resolve(originalFetch(...args)),200));setTimeout(()=>{${mutation}},60);})()`);
+      const i=document.querySelector('img');i.src=data;await i.decode();const nativeDigest=crypto.subtle.digest.bind(crypto.subtle);
+      crypto.subtle.digest=(...args)=>new Promise(resolve=>setTimeout(()=>resolve(nativeDigest(...args)),200));setTimeout(()=>{${mutation}},60);})()`);
     assert.equal((await probe('invoke')).invoked, false);
     assert.equal(await evaluate('globalThis.clicks'), 0);
   }
@@ -745,6 +751,67 @@ test('quota and platform errors remain observable without reading their text', a
   const result = await probe('observe');
   assert.equal(result.quotaDetected, true); assert.equal(result.platformErrorDetected, true);
 });
+test('local proof reasons remain finite for MIME, header, read failure and timeout', async () => {
+  const cases = [
+    [`document.querySelector('img').src=${JSON.stringify('data:image/jpeg;base64,' + imageBase64)};`, 'prepared-attachment-data-mime-jpeg'],
+    [`document.querySelector('img').src=${JSON.stringify('data:image/png;charset=utf-8;base64,' + imageBase64)};`, 'prepared-attachment-data-png-header'],
+    [`document.querySelector('img').src=${JSON.stringify('data:IMAGE/PNG;BASE64,' + imageBase64)};`, 'prepared-attachment-data-png-header'],
+    [`const i=document.querySelector('img');i.src=URL.createObjectURL(originalFile);await i.decode();globalThis.fetch=()=>Promise.reject(new Error('SYNTHETIC_PRIVATE_SOURCE'));`, 'prepared-attachment-local-fetch-failed'],
+    [`const r=new FileReader();const data=await new Promise(resolve=>{r.onload=()=>resolve(r.result);r.readAsDataURL(originalFile);});const i=document.querySelector('img');i.src=data;await i.decode();crypto.subtle.digest=()=>Promise.reject(new Error('SYNTHETIC_PRIVATE_DIGEST'));`, 'prepared-attachment-local-digest-failed'],
+    [`const r=new FileReader();const data=await new Promise(resolve=>{r.onload=()=>resolve(r.result);r.readAsDataURL(originalFile);});const i=document.querySelector('img');i.src=data;await i.decode();const nativeDigest=crypto.subtle.digest.bind(crypto.subtle);crypto.subtle.digest=(...args)=>new Promise(resolve=>setTimeout(()=>resolve(nativeDigest(...args)),2500));`, 'prepared-attachment-local-proof-timeout'],
+  ];
+  for (const [mutation, code] of cases) {
+    await startDelayedUpload('globalThis.originalFile=file;', false);
+    assert.equal((await probe('prepare')).code, 'ok');
+    await evaluate(`(async()=>{${mutation}})()`);
+    const result = await probe('invoke');
+    assert.equal(result.code, code);
+    assert.equal(result.invoked, false);
+    assert.equal(result.identityDiagnostics.originalFileVerified, true);
+    assert.ok(result.identityDiagnostics.sourceCount >= 1);
+    assert.ok(result.identityDiagnostics.stage !== 'NotStarted');
+    if (code.includes('mime-jpeg')) {
+      assert.equal(result.identityDiagnostics.mime, 'Jpeg');
+      assert.equal(result.identityDiagnostics.sourceRejectReason, 'Mime');
+      assert.equal(result.identityDiagnostics.result, 'Rejected');
+    }
+    if (code.includes('digest-failed')) {
+      assert.equal(result.identityDiagnostics.proofFailure, 'Digest');
+      assert.equal(result.identityDiagnostics.stage, 'Digest');
+      assert.equal(result.identityDiagnostics.result, 'Error');
+    }
+    if (code.includes('proof-timeout')) {
+      assert.equal(result.identityDiagnostics.proofFailure, 'Timeout');
+      assert.equal(result.identityDiagnostics.exceptionKind, 'Timeout');
+      assert.equal(result.identityDiagnostics.result, 'TimedOut');
+    }
+    assert.equal(await evaluate('globalThis.clicks'), 0);
+    assert.equal(JSON.stringify(result).includes('SYNTHETIC_PRIVATE'), false);
+    assert.equal(JSON.stringify(result).includes(imageBase64), false);
+  }
+});
+
+test('restrictive CSP permits image data but local content proof does not fetch the data URI', async () => {
+  await startDelayedUpload('globalThis.originalFile=file;', false);
+  assert.equal((await probe('prepare')).code, 'ok');
+  await evaluate(`(async()=>{const policy=document.createElement('meta');policy.httpEquiv='Content-Security-Policy';
+    policy.content="connect-src 'self' blob:; img-src 'self' blob: data:";document.head.append(policy);
+    const reader=new FileReader();globalThis.fixtureData=await new Promise(resolve=>{reader.onload=()=>resolve(reader.result);reader.readAsDataURL(originalFile);});
+    const image=document.querySelector('img');image.src=fixtureData;await image.decode();
+    globalThis.fixtureDataFetches=0;const nativeFetch=fetch;
+    globalThis.fetch=(...args)=>{if(String(args[0]).startsWith('data:'))fixtureDataFetches++;return nativeFetch(...args);};})()`);
+  assert.equal(await evaluate(`(async()=>{try{await fetch(fixtureData);return false;}catch{return true;}})()`), true);
+  await evaluate('globalThis.fixtureDataFetches=0;');
+  const result = await probe('invoke');
+  assert.equal(result.invoked, true, result.code);
+  assert.equal(result.identityDiagnostics.mime, 'Png');
+  assert.equal(result.identityDiagnostics.result, 'Matched');
+  assert.equal(result.identityDiagnostics.dimensionsEqual, true);
+  assert.equal(await evaluate('globalThis.fixtureDataFetches'), 0);
+  assert.equal((await probe('invoke')).invoked, false);
+  assert.equal(await evaluate('globalThis.clicks'), 1);
+});
+
 test('all production probes reject an unrelated origin before reading or mutating controls', async () => {
   await cdp('Page.navigate', { url: 'https://example.invalid/opengamemate-synthetic-test' });
   for (let attempt=0; attempt<50; attempt++) { if(await evaluate("location.hostname === 'example.invalid'")) break; await delay(50); }

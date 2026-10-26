@@ -135,6 +135,7 @@ internal static class Program
             await session.Core.CallDevToolsProtocolMethodAsync("Page.setDocumentContent", JsonSerializer.Serialize(new { frameId, html }));
             await Eval("globalThis.__openGameMatePreparedV1=null; globalThis.clicks=0; globalThis.changes=0;");
             await Eval("globalThis.fixtureNativeFetch??=fetch;globalThis.fetch=fixtureNativeFetch;");
+            await Eval("globalThis.fixtureNativeDigest??=crypto.subtle.digest.bind(crypto.subtle);crypto.subtle.digest=fixtureNativeDigest;");
             await Eval("globalThis.acceptFile=file=>{const p=document.createElement('div');p.dataset.testid='attachment';p.setAttribute('aria-busy','true');const i=document.createElement('img');i.width=64;i.height=36;i.src=URL.createObjectURL(file);p.append(i);document.querySelector('#target').append(p);setTimeout(()=>p.setAttribute('aria-busy','false'),80);};");
             var attach = acceptsImage
                 ? "acceptFile(e.clipboardData?.files[0]??e.target.files[0]);"
@@ -256,7 +257,7 @@ internal static class Program
         await PrepareImageLeafAsync();
         await Eval("document.querySelector('img').src='data:image/png;base64,DIFFERENT'");
         submission = await adapter.SubmitAsync();
-        Check(submission.Code == "prepared-attachment-content-unverifiable" && !submission.TriggerInvoked,
+        Check(submission.Code == "prepared-attachment-data-base64-invalid" && !submission.TriggerInvoked,
             "same-node image swap returns a bounded source-change code without clicking");
         Check(submission.Diagnostics is
         {
@@ -410,7 +411,7 @@ internal static class Program
 
         await DelayedUploadFixtureAsync("", busy: false);
         await adapter.PrepareInputAsync(image, message);
-        await Eval("(async()=>{const reader=new FileReader();const data=await new Promise(resolve=>{reader.onload=()=>resolve(reader.result);reader.readAsDataURL(originalFile);});const i=document.querySelector('img');i.src=data;await i.decode();const nativeFetch=fetch;globalThis.fetch=(...args)=>new Promise(resolve=>setTimeout(()=>resolve(nativeFetch(...args)),700));return true;})()");
+        await Eval("(async()=>{const reader=new FileReader();const data=await new Promise(resolve=>{reader.onload=()=>resolve(reader.result);reader.readAsDataURL(originalFile);});const i=document.querySelector('img');i.src=data;await i.decode();const nativeDigest=crypto.subtle.digest.bind(crypto.subtle);crypto.subtle.digest=(...args)=>new Promise(resolve=>setTimeout(()=>resolve(nativeDigest(...args)),700));return true;})()");
         using (var cancelledProof = new CancellationTokenSource(TimeSpan.FromMilliseconds(100)))
         {
             try
@@ -435,5 +436,23 @@ internal static class Program
         Check(combined.Code == "image-file-size-invalid" && (await Eval("globalThis.clicks===0 && globalThis.changes===0")).GetBoolean(),
             "an oversized source File is rejected before selection, paste or submit");
         File.Delete(oversizedImage);
+
+        await DelayedUploadFixtureAsync("", busy: false);
+        combined = await adapter.PrepareInputAsync(image, message);
+        Check(combined.Status == WebAdapterStatus.Succeeded, "CSP regression begins with original File/blob identity already verified");
+        await Eval("(async()=>{const policy=document.createElement('meta');policy.httpEquiv='Content-Security-Policy';policy.content=\"connect-src 'self' blob:; img-src 'self' blob: data:\";document.head.append(policy);const reader=new FileReader();globalThis.fixtureData=await new Promise(resolve=>{reader.onload=()=>resolve(reader.result);reader.readAsDataURL(originalFile);});const img=document.querySelector('img');img.src=fixtureData;await img.decode();globalThis.fixtureDataFetches=0;const nativeFetch=fetch;globalThis.fetch=(...args)=>{if(String(args[0]).startsWith('data:'))fixtureDataFetches++;return nativeFetch(...args);};return true;})()");
+        Check((await Eval("(async()=>{try{await fetch(fixtureData);return false;}catch{return true;}})()")).GetBoolean(),
+            "real WebView2 policy allows the image but rejects fetch of its identical inline bytes");
+        await Eval("globalThis.fixtureDataFetches=0;");
+        submission = await adapter.SubmitAsync();
+        Check(submission.Status == WebAdapterStatus.Succeeded && (await Eval("fixtureDataFetches===0 && clicks===1")).GetBoolean() &&
+            submission.Diagnostics?.Identity is
+            {
+                Mime: IdentityMimeKind.Png, Result: IdentityResult.Matched,
+                OriginalFileVerified: true, DimensionsEqual: true
+            } &&
+            submission.Diagnostics?.Attachment is { BeforeSrc: AttachmentSourceKind.Blob, AfterSrc: AttachmentSourceKind.Data },
+            "production proof decodes inline PNG locally under CSP and clicks only once");
+        Check((await adapter.SubmitAsync()).Code == "input-not-prepared", "CSP-compatible proof does not grant a second send permit");
     }
 }

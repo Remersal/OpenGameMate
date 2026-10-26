@@ -328,6 +328,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 code: uploadResult.code,
                 pageState: ogmPageState(scope),
                 attachmentDiagnostics: ogmAttachmentDiagnostics(scope, true),
+                identityDiagnostics: ogmIdentityDiagnostics(globalThis[ogmPreparedKey]?.upload, scope, uploadResult.code),
                 fileSelected: fileInput?.files?.length === 1,
                 previewDetected: ogmHasAttachment(scope),
                 textInserted: {{expectTextJson}} && ogmCanonicalText(actual) === ogmCanonicalText({{messageJson}}),
@@ -366,6 +367,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 previewDetected = GetBoolean(probeResult, "previewDetected"),
                 textInserted = GetBoolean(probeResult, "textInserted"),
                 attachmentDiagnostics = probeResult.GetProperty("attachmentDiagnostics"),
+                identityDiagnostics = probeResult.GetProperty("identityDiagnostics"),
                 pageState = probeResult.GetProperty("pageState"),
             });
         }
@@ -401,7 +403,7 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
         return new(fileSelected, previewDetected, textInserted, preparationCode, status,
             new AdapterDiagnostics(TryReadEnum(probeResult, "pageState", AdapterPageState.Unknown), 0, [],
                 status == WebAdapterStatus.Succeeded ? AdapterFailureStage.None : AdapterFailureStage.AttachmentPreparation,
-                ParseAttachmentDiagnostics(probeResult)));
+                ParseAttachmentDiagnostics(probeResult), ParseIdentityDiagnostics(probeResult)));
     }
 
     private async Task ReleaseUnfinishedUploadAsync()
@@ -922,13 +924,24 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                     (async () => {
                       const composers = ogmComposers({{composerSelectorJson}});
                       if (composers.length !== 1) return { code: 'composer-count-before-invoke' };
-                      const attachmentDiagnostics = ogmAttachmentDiagnostics(ogmScope(composers[0]));
+                      const before = ogmAttachmentDiagnostics(ogmScope(composers[0]));
+                      const upload = globalThis[ogmPreparedKey]?.upload;
+                      const proofBefore = upload?.lastProof;
                       const code = await ogmVerifyPreparedLocalSource(composers[0]);
-                      return { code, attachmentDiagnostics };
+                      const afterComposers = ogmComposers({{composerSelectorJson}});
+                      const scope = afterComposers.length === 1 ? ogmScope(afterComposers[0]) : null;
+                      const after = ogmAttachmentDiagnostics(scope);
+                      const attachmentDiagnostics = { ...after, beforeCount: before.beforeCount,
+                        beforeSrc: before.beforeSrc, beforeSrcSet: before.beforeSrcSet, beforeCurrentSrc: before.beforeCurrentSrc,
+                        srcChanged: before.srcChanged || after.srcChanged, srcSetChanged: before.srcSetChanged || after.srcSetChanged,
+                        currentSrcChanged: before.currentSrcChanged || after.currentSrcChanged };
+                      return { code, attachmentDiagnostics,
+                        identityDiagnostics: ogmIdentityDiagnostics(upload, scope, code, upload?.lastProof !== proofBefore) };
                     })()
                     """);
                 cancellationToken.ThrowIfCancellationRequested();
                 var identityDiagnostics = ParseAttachmentDiagnostics(identityResult);
+                adapterDiagnostics = adapterDiagnostics with { Identity = ParseIdentityDiagnostics(identityResult) };
                 if (GetCode(identityResult) != "ok")
                 {
                     return new(false, false, false, GetCode(identityResult), WebAdapterStatus.AdapterInvalid,
@@ -1336,6 +1349,28 @@ public sealed class ChatGptWebAdapter : IAiWebAdapter
                 ? busy.GetBoolean() : null,
             GetBoolean(value, "progressBarVisible"), GetBoolean(value, "busyObserved"), GetBoolean(value, "completionObserved"),
             Enum.IsDefined(phase) ? phase : AttachmentUploadPhase.Unknown);
+    }
+
+    public static AdapterIdentityDiagnostics? ParseIdentityDiagnostics(JsonElement result)
+    {
+        if (!result.TryGetProperty("identityDiagnostics", out var value) || value.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        T Read<T>(string name, T fallback) where T : struct, Enum
+        {
+            var parsed = TryReadEnum(value, name, fallback);
+            return Enum.IsDefined(parsed) ? parsed : fallback;
+        }
+
+        return new(Read("mime", IdentityMimeKind.Unknown), Read("stage", IdentityStage.NotStarted),
+            Read("result", IdentityResult.NotChecked), Read("sourceRejectReason", IdentitySourceReject.None),
+            Read("proofFailure", IdentityProofFailure.None), Read("exceptionKind", IdentityExceptionKind.Other),
+            Read("duration", IdentityDurationBucket.None), ReadBoundedInteger(value, "sourceCount", 0, 99),
+            value.TryGetProperty("dimensionsEqual", out var dimensions) && dimensions.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? dimensions.GetBoolean() : null,
+            GetBoolean(value, "originalFileVerified"));
     }
 
     private static JsonElement ParseRuntimeEvaluateResponse(JsonElement response)

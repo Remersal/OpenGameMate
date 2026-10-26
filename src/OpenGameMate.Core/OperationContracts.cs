@@ -51,6 +51,26 @@ public enum AttachmentSourceKind { Unknown, Empty, Blob, Data, Http, Other, Mixe
 
 public enum AttachmentUploadPhase { Unknown, Uploading, Ready, Failed, Abandoned }
 
+public enum IdentityMimeKind { Unknown, Png, Jpeg, Webp, Other }
+public enum IdentityStage { NotStarted, SourceValidation, DataDecode, Fetch, Response, OriginalFile, Bytes, Digest, Complete, Decode }
+public enum IdentityResult { NotChecked, Matched, Mismatched, Rejected, Error, TimedOut }
+public enum IdentitySourceReject { None, Mime, Header, Base64, Size, SrcSet, UntrustedSource, SourceLimit }
+public enum IdentityProofFailure { None, Fetch, Response, DataDecode, OriginalFile, Bytes, Digest, Timeout, ByteMismatch, Decode, SourceLimit, Other }
+public enum IdentityExceptionKind { None, TypeError, SecurityError, OperationError, EncodingError, AbortError, DataError, NotReadableError, Timeout, Other }
+public enum IdentityDurationBucket { None, Under100Ms, Under500Ms, Under2Seconds, AtLeast2Seconds }
+
+public sealed record AdapterIdentityDiagnostics(
+    IdentityMimeKind Mime,
+    IdentityStage Stage,
+    IdentityResult Result,
+    IdentitySourceReject SourceRejectReason,
+    IdentityProofFailure ProofFailure,
+    IdentityExceptionKind ExceptionKind,
+    IdentityDurationBucket Duration,
+    int SourceCount,
+    bool? DimensionsEqual,
+    bool OriginalFileVerified);
+
 public sealed record AdapterAttachmentDiagnostics(
     int BeforeCount,
     int AfterCount,
@@ -84,7 +104,8 @@ public sealed record AdapterDiagnostics(
     int DetectedButtonCount,
     IReadOnlyList<AdapterButtonCandidate> CandidateButtons,
     AdapterFailureStage FailureStage,
-    AdapterAttachmentDiagnostics? Attachment = null);
+    AdapterAttachmentDiagnostics? Attachment = null,
+    AdapterIdentityDiagnostics? Identity = null);
 
 public sealed record InputPreparationResult(
     bool FileInputSelected,

@@ -108,6 +108,13 @@ public sealed record DiagnosticEvent(
         {
             throw new DiagnosticEventValidationException("Attachment diagnostics are outside the finite allowlist.");
         }
+        if (diagnostics.Identity is { } identity &&
+            (identity.SourceCount is < 0 or > 99 || !Enum.IsDefined(identity.Mime) || !Enum.IsDefined(identity.Stage) ||
+            !Enum.IsDefined(identity.Result) || !Enum.IsDefined(identity.SourceRejectReason) || !Enum.IsDefined(identity.ProofFailure) ||
+            !Enum.IsDefined(identity.ExceptionKind) || !Enum.IsDefined(identity.Duration)))
+        {
+            throw new DiagnosticEventValidationException("Identity diagnostics are outside the finite allowlist.");
+        }
     }
 
     private static void ValidateOptionalLabel(string? value, string name, int maximumLength)

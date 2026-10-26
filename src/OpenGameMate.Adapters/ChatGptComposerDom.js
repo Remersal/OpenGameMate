@@ -213,12 +213,56 @@ const ogmAttachmentDiagnostics = (scope, preparing = false) => {
 // preview bytes can be bound to the File supplied for this attempt. Never fetch a
 // server preview, infer identity from a filename, or treat send readiness as upload
 // completion. Busy is an optional signal; local content proof remains mandatory.
-const ogmLocalPngSource = source => {
-  if (source.startsWith('blob:' + location.origin + '/')) return true;
+const ogmLocalPngSourceFailure = source => {
+  if (source.startsWith('blob:' + location.origin + '/')) return null;
   const prefix = 'data:image/png;base64,';
-  if (!source.startsWith(prefix) || source.length > prefix.length + 4 * Math.ceil(20 * 1024 * 1024 / 3)) return false;
+  if (!source.startsWith(prefix)) {
+    if (/^data:image\/(?:jpeg|jpg)[;,]/i.test(source)) return 'attachment-data-mime-jpeg';
+    if (/^data:image\/webp[;,]/i.test(source)) return 'attachment-data-mime-webp';
+    if (/^data:image\/png[;,]/i.test(source)) return 'attachment-data-png-header';
+    return source.startsWith('data:') ? 'attachment-data-mime-unsupported' : 'attachment-content-unverifiable';
+  }
+  if (source.length > prefix.length + 4 * Math.ceil(20 * 1024 * 1024 / 3)) return 'attachment-data-size-limit';
   const data = source.slice(prefix.length);
-  return data.length > 0 && data.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(data);
+  return data.length > 0 && data.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(data)
+    ? null : 'attachment-data-base64-invalid';
+};
+const ogmIdentityMime = source => /^data:image\/png[;,]/i.test(source) ? 'Png' :
+  /^data:image\/(jpeg|jpg)[;,]/i.test(source) ? 'Jpeg' : /^data:image\/webp[;,]/i.test(source) ? 'Webp' :
+  source.startsWith('data:') ? 'Other' : 'Unknown';
+const ogmIdentityDiagnostics = (upload, scope, code, proofRan = true) => {
+  if (!upload) return null;
+  const attachments = ogmAttachments(scope);
+  const image = attachments.length === 1 && attachments[0] instanceof HTMLImageElement ? attachments[0] : null;
+  const source = image?.src ?? '';
+  const trace = proofRan || code === 'ok' ? upload.lastProof : null;
+  const reason = code.replace(/^prepared-/, '');
+  const reject = reason.includes('data-mime-') ? 'Mime' : reason.includes('data-png-header') ? 'Header' :
+    reason.includes('data-base64') ? 'Base64' : reason.includes('data-size') ? 'Size' : image?.srcset ? 'SrcSet' :
+    reason.includes('source-change-limit') ? 'SourceLimit' : reason === 'attachment-content-unverifiable' ? 'UntrustedSource' : 'None';
+  const failure = ({ 'attachment-local-fetch-failed': 'Fetch', 'attachment-local-response-failed': 'Response',
+    'attachment-data-decode-failed': 'DataDecode', 'attachment-original-file-read-failed': 'OriginalFile',
+    'attachment-local-bytes-failed': 'Bytes', 'attachment-local-digest-failed': 'Digest',
+    'attachment-local-proof-timeout': 'Timeout', 'attachment-content-changed': 'ByteMismatch',
+    'attachment-image-not-ready': 'Decode', 'attachment-source-change-limit': 'SourceLimit' })[reason] ??
+    (reason === 'attachment-local-read-failed' ? 'Other' : 'None');
+  const operation = trace?.failureOperation ?? trace?.operation;
+  const failureStage = ({ Fetch: 'Fetch', Response: 'Response', DataDecode: 'DataDecode', OriginalFile: 'OriginalFile',
+    Bytes: 'Bytes', Digest: 'Digest', Decode: 'Decode' })[failure];
+  const stage = reject !== 'None' ? 'SourceValidation' : failureStage ??
+    ({ source: 'SourceValidation', 'data-decode': 'DataDecode', fetch: 'Fetch', 'response-blob': 'Response',
+      'original-file': 'OriginalFile', 'array-buffer': 'Bytes', digest: 'Digest', complete: 'Complete' })[operation] ?? 'NotStarted';
+  const result = reject !== 'None' ? 'Rejected' : failure === 'Timeout' ? 'TimedOut' : failure === 'ByteMismatch' ? 'Mismatched' :
+    failure !== 'None' ? 'Error' : trace?.valid ? 'Matched' : 'NotChecked';
+  const elapsed = reject !== 'None' || failure === 'Decode' || !proofRan ? null : trace?.elapsed;
+  return { mime: reject !== 'None' ? ogmIdentityMime(source) : trace?.mime ?? ogmIdentityMime(source),
+    stage, result, sourceRejectReason: reject, proofFailure: failure,
+    exceptionKind: failure === 'Timeout' ? 'Timeout' : failure === 'Decode' ? 'None' : trace?.exceptionKind ?? 'None',
+    duration: elapsed === null || elapsed === undefined ? 'None' : elapsed < 100 ? 'Under100Ms' :
+      elapsed < 500 ? 'Under500Ms' : elapsed < 2000 ? 'Under2Seconds' : 'AtLeast2Seconds',
+    sourceCount: Math.min(99, Math.max(0, upload.sourceChecks)),
+    dimensionsEqual: image && upload.width ? image.naturalWidth === upload.width && image.naturalHeight === upload.height : null,
+    originalFileVerified: Boolean(upload.originalFileVerified) };
 };
 const ogmAttachmentBusy = (scope, image) => {
   const wrappers = new Set(ogmAttachmentSelectors.flatMap(selector =>
@@ -246,33 +290,65 @@ const ogmBeginUpload = (composer, digest, size) => {
     proofs: new Map(), sourceChecks: 0, sawBusy: false, seenImage: false, completed: null, failure: null };
   state.upload = upload;
   const fail = code => { upload.failure ??= code; };
-  const hash = async blob => {
+  const hash = async (blob, stage = () => {}) => {
     if (blob.size !== size || blob.size > 20 * 1024 * 1024) return false;
+    stage('array-buffer');
     const bytes = await blob.arrayBuffer();
     const view = new DataView(bytes);
     if (bytes.byteLength < 33 || view.getUint32(0) !== 0x89504e47 || view.getUint32(4) !== 0x0d0a1a0a ||
       view.getUint32(8) !== 13 || view.getUint32(12) !== 0x49484452) return false;
     const width = view.getUint32(16), height = view.getUint32(20);
     if (!width || width > 1920 || !height || height > 1080) return false;
+    stage('digest');
     const actual = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
     const matches = [...actual].map(value => value.toString(16).padStart(2, '0')).join('') === digest;
     if (matches) { upload.width = width; upload.height = height; }
     return matches;
   };
   upload.prove = source => {
-    const proof = { valid: false };
-    if (!ogmLocalPngSource(source)) { fail('attachment-content-unverifiable'); return proof; }
+    const proof = { valid: false, operation: 'source', exceptionKind: 'None', mime: ogmIdentityMime(source) };
+    upload.lastProof = proof;
+    const started = performance.now();
+    let operation = 'source';
+    const sourceFailure = ogmLocalPngSourceFailure(source);
+    if (sourceFailure) { fail(sourceFailure); return proof; }
     if (upload.sourceChecks++ >= 8) { fail('attachment-source-change-limit'); return proof; }
     // A local URL is only a locator: verify its bytes against the original File.
     // Never fetch HTTP previews or return bytes, source values or digests.
     proof.pending = Promise.race([
       (async () => {
-        const response = await fetch(source, { credentials: 'omit', redirect: 'error' });
-        proof.valid = await upload.fileProof && await hash(await response.blob());
+        let blob;
+        if (source.startsWith('data:')) {
+          // The bytes are already in this owned preview. Decode locally: fetch(data:)
+          // adds an unnecessary connect-src dependency even when img-src permits it.
+          operation = 'data-decode';
+          const binary = atob(source.slice('data:image/png;base64,'.length));
+          const bytes = new Uint8Array(binary.length);
+          for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+          blob = new Blob([bytes], { type: 'image/png' });
+        } else {
+          operation = 'fetch';
+          const response = await fetch(source, { credentials: 'omit', redirect: 'error' });
+          operation = 'response-blob';
+          blob = await response.blob();
+        }
+        operation = 'original-file';
+        proof.valid = await upload.fileProof && await hash(blob, stage => { operation = stage; });
         if (!proof.valid) fail('attachment-content-changed');
       })(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('local-preview-timeout')), 2000))
-    ]).catch(() => fail('attachment-content-unverifiable'));
+      new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error(), { name: 'OgmLocalProofTimeout' })), 2000))
+    ]).then(() => { proof.operation = 'complete'; }).catch(error => {
+      proof.failureOperation = operation;
+      const timeout = error?.name === 'OgmLocalProofTimeout';
+      proof.exceptionKind = timeout ? 'Timeout' :
+        (['TypeError', 'SecurityError', 'OperationError', 'EncodingError', 'AbortError', 'DataError', 'NotReadableError'].includes(error?.name)
+          ? error.name : 'Other');
+      fail(timeout ? 'attachment-local-proof-timeout' :
+        ({ fetch: 'attachment-local-fetch-failed', 'response-blob': 'attachment-local-response-failed',
+          'data-decode': 'attachment-data-decode-failed', 'original-file': 'attachment-original-file-read-failed',
+          'array-buffer': 'attachment-local-bytes-failed', digest: 'attachment-local-digest-failed' })[operation] ??
+        'attachment-local-read-failed');
+    }).finally(() => { proof.elapsed = performance.now() - started; });
     return proof;
   };
   const sameSource = (left, right) => left.node === right.node && left.source === right.source &&
@@ -307,9 +383,11 @@ const ogmBeginUpload = (composer, digest, size) => {
     if (identity.sourceSet) {
       fail('attachment-source-set-unverifiable'); return;
     }
-    if (!ogmLocalPngSource(identity.source)) { fail('attachment-content-unverifiable'); return; }
+    const sourceFailure = ogmLocalPngSourceFailure(identity.source);
+    if (sourceFailure) { fail(sourceFailure); return; }
     if (!upload.file || upload.proofs.has(identity.source)) return;
-    upload.fileProof ??= hash(upload.file);
+    upload.fileProof ??= hash(upload.file).then(valid => { upload.originalFileVerified = valid; return valid; })
+      .catch(() => { fail('attachment-original-file-read-failed'); return false; });
     upload.proofs.set(identity.source, upload.prove(identity.source));
   };
   upload.observer = new MutationObserver(() => upload.sample());
@@ -365,9 +443,11 @@ const ogmVerifyPreparedLocalSource = async composer => {
   if (!upload?.fileVerified || upload.failure || expected.length !== 1 || current.length !== 1 ||
     !expected[0].image || !(image instanceof HTMLImageElement) ||
     (expected[0].node !== image && expected[0].node.isConnected)) return code;
-  if (expected[0].sourceSet || image.srcset || !ogmLocalPngSource(expected[0].source) || !ogmLocalPngSource(image.src)) {
+  if (expected[0].sourceSet || image.srcset) {
     return 'prepared-attachment-content-unverifiable';
   }
+  const sourceFailure = ogmLocalPngSourceFailure(expected[0].source) ?? ogmLocalPngSourceFailure(image.src);
+  if (sourceFailure) return 'prepared-' + sourceFailure;
   if (ogmAttachmentBusy(state.scope, image)) {
     return 'prepared-attachment-image-not-ready';
   }
@@ -385,8 +465,7 @@ const ogmVerifyPreparedLocalSource = async composer => {
   const after = ogmAttachments(state.scope);
   if (after.length !== 1 || after[0] !== image || image.src !== source || image.srcset ||
     !ogmDecodedImageMatches(image, upload) || ogmAttachmentBusy(state.scope, image)) return code;
-  if (!proof.valid) return upload.failure === 'attachment-content-changed'
-    ? 'prepared-attachment-content-changed' : 'prepared-attachment-content-unverifiable';
+  if (!proof.valid) return 'prepared-' + (upload.failure ?? 'attachment-content-unverifiable');
   state.attachments = after;
   state.attachmentIdentities = after.map(ogmAttachmentIdentity);
   return 'ok';

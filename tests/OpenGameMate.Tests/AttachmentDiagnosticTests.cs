@@ -8,6 +8,43 @@ namespace OpenGameMate.Tests;
 public sealed class AttachmentDiagnosticTests
 {
     [Fact]
+    public async Task IdentityDiagnostics_PersistPostProofEnumsAndDropUntrustedFields()
+    {
+        using var response = JsonDocument.Parse("""
+            {"identityDiagnostics":{"mime":"Png","stage":"Digest","result":"Error","sourceRejectReason":"None",
+            "proofFailure":"Digest","exceptionKind":"OperationError","duration":"Under2Seconds","sourceCount":2,
+            "dimensionsEqual":true,"originalFileVerified":true,"uri":"PRIVATE_URI","message":"PRIVATE_MESSAGE","hash":"PRIVATE_HASH"}}
+            """);
+        var identity = Assert.IsType<AdapterIdentityDiagnostics>(ChatGptWebAdapter.ParseIdentityDiagnostics(response.RootElement));
+        var directory = Path.Combine(Path.GetTempPath(), $"ogm-identity-logs-{Guid.NewGuid():N}");
+        var file = Path.Combine(directory, "opengamemate-20261026.jsonl");
+        try
+        {
+            await new JsonLineDiagnosticLogger(directory).AppendAsync(new DiagnosticEvent(
+                new DateTimeOffset(2026, 10, 26, 15, 0, 0, TimeSpan.Zero), DiagnosticLevel.Warning,
+                "adapter.submit-probe", ErrorCode: "prepared-attachment-local-digest-failed", Success: false,
+                AdapterDiagnostics: new(AdapterPageState.ComposerWithAttachment, 0, [], AdapterFailureStage.Invocation, Identity: identity)));
+            var line = Assert.Single(await File.ReadAllLinesAsync(file));
+            using var saved = JsonDocument.Parse(line);
+            var result = saved.RootElement.GetProperty("adapterDiagnostics").GetProperty("identity");
+            Assert.Equal("digest", result.GetProperty("proofFailure").GetString());
+            Assert.Equal("operationError", result.GetProperty("exceptionKind").GetString());
+            Assert.Equal("error", result.GetProperty("result").GetString());
+            Assert.True(result.GetProperty("dimensionsEqual").GetBoolean());
+            Assert.DoesNotContain("PRIVATE", line, StringComparison.Ordinal);
+            Assert.Throws<DiagnosticEventValidationException>(() => new DiagnosticEvent(DateTimeOffset.UtcNow,
+                DiagnosticLevel.Warning, "adapter.submit-probe", AdapterDiagnostics:
+                    new(AdapterPageState.Unknown, 0, [], AdapterFailureStage.Invocation,
+                        Identity: identity with { ExceptionKind = (IdentityExceptionKind)999 })).Validate());
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+            if (Directory.Exists(directory)) Directory.Delete(directory);
+        }
+    }
+
+    [Fact]
     public async Task AttachmentDiagnostics_PersistOnlyFiniteCategoriesAndLifecycleFlags()
     {
         using var response = JsonDocument.Parse("""
