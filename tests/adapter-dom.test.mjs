@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 // Execute the shipped JS and every production C# probe in a real, isolated DOM.
 // The test URL is intercepted before network access; no ChatGPT account is used.
@@ -39,6 +40,8 @@ const values = {
   MaximumDiagnosticScopeDepth: source.match(/MaximumDiagnosticScopeDepth = (\d+)/)[1],
   'MaximumDiagnosticScopeDepth + 1': String(Number(source.match(/MaximumDiagnosticScopeDepth = (\d+)/)[1]) + 1),
   expectTextJson: 'true', messageJson: JSON.stringify(message), imageBase64Json: JSON.stringify(imageBase64),
+  imageDigestJson: JSON.stringify(createHash('sha256').update(Buffer.from(imageBase64, 'base64')).digest('hex')),
+  imageLength: String(Buffer.from(imageBase64, 'base64').length),
   requireAttachmentJson: 'false', expectedPageStateJson: 'null', allowPreparedAttachmentJson: 'false',
   ComposerDomHelpers: helpers,
 };
@@ -83,18 +86,42 @@ async function evaluate(expression) {
   return result.result.value;
 }
 async function probe(name, overrides) {
-  return await evaluate(render(wrapper, { expression: render(probes[name], overrides) }));
+  let result;
+  for (let attempt = 0; attempt < 80; attempt++) {
+    result = await evaluate(render(wrapper, { expression: render(probes[name], overrides) }));
+    if (name !== 'prepare' || result.code !== 'attachment-upload-pending') return result;
+    await delay(50);
+  }
+  return result;
 }
 const composer = '<textarea id="prompt-textarea"></textarea>';
 const send = '<button type="button" data-testid="send-button">Send</button>';
 const input = '<input type="file" accept="image/*" hidden>';
 function form(content = composer + input + send) { return `<form id="target">${content}</form>`; }
+const receiver = `globalThis.acceptFile = file => {
+  const preview=document.createElement('div');preview.dataset.testid='attachment';preview.setAttribute('aria-busy','true');
+  const image=document.createElement('img');image.width=64;image.height=36;image.src=URL.createObjectURL(file);
+  preview.append(image);document.querySelector('#target').append(preview);
+  setTimeout(()=>preview.setAttribute('aria-busy','false'),60);
+};`;
 async function fixture(html = form()) {
   await cdp('Page.setDocumentContent', { frameId, html: '<!doctype html><html><body>' + html + '</body></html>' });
   await evaluate('globalThis.__openGameMatePreparedV1 = null; globalThis.clicks = 0; globalThis.changes = 0;');
+  await evaluate('globalThis.fixtureFetch ??= fetch; globalThis.fetch = globalThis.fixtureFetch;');
   await evaluate(`document.querySelectorAll('[data-testid="send-button"]').forEach(b => b.onclick = () => globalThis.clicks++);`);
+  await evaluate(receiver);
 }
 async function addPreview() {
+  if (await evaluate('!!globalThis.__openGameMatePreparedV1?.upload')) {
+    if (await evaluate('!!document.querySelector("input[data-opengamemate-file]")')) {
+      await evaluate('document.querySelector("input[data-opengamemate-file]").onchange=e=>acceptFile(e.target.files[0])');
+      await attachFile();
+    } else {
+      await evaluate(`document.querySelector('textarea,[role=textbox]').onpaste=e=>{acceptFile(e.clipboardData.files[0]);e.preventDefault();}`);
+      await probe('paste');
+    }
+    return;
+  }
   await evaluate(`(() => { const preview=document.createElement('div'); preview.dataset.testid='attachment'; preview.textContent='synthetic.png'; document.querySelector('#target').append(preview); })()`);
 }
 async function attachFile() {
@@ -240,7 +267,7 @@ test('semantic submit controls owned by a foreign form are never counted or clic
 });
 test('ambiguous native inputs stay untouched while the unique live editor accepts paste', async () => {
   await fixture(unified(unifiedEditor + input + input + input + '<input type="file" hidden>' + send));
-  await evaluate(`document.querySelector('[role=textbox]').onpaste=e=>{const p=document.createElement('div');p.dataset.testid='attachment';p.textContent='synthetic.png';document.querySelector('form').append(p);e.preventDefault();}`);
+  await evaluate(`document.querySelector('[role=textbox]').onpaste=e=>{acceptFile(e.clipboardData.files[0]);e.preventDefault();}`);
   assert.equal((await probe('locate')).code, 'file-input-ambiguous');
   assert.equal(await evaluate('document.querySelectorAll("input[data-opengamemate-file]").length'), 0);
   await probe('paste');
@@ -326,8 +353,7 @@ test('no owned file input uses only the unique composer paste path', async () =>
   await fixture(form(composer + send) + input + input + input);
   await evaluate(`document.querySelector('#prompt-textarea').onpaste = e => {
     globalThis.pastedFiles=e.clipboardData.files.length;
-    const p=document.createElement('div');p.dataset.testid='attachment';p.textContent='synthetic.png';
-    document.querySelector('#target').append(p);e.preventDefault();};`);
+    acceptFile(e.clipboardData.files[0]);e.preventDefault();};`);
   assert.equal((await probe('locate')).code, 'file-input-none');
   assert.equal((await probe('paste')).code, 'paste-event-dispatched');
   assert.equal(await evaluate('globalThis.pastedFiles'), 1);
@@ -338,8 +364,7 @@ test('CDP image selection plus text preparation observes the real preview and on
   await evaluate(`document.querySelector('input').onchange = () => {
     globalThis.changes++;
     if(!document.querySelector('[data-testid="attachment"]')) {
-      const p=document.createElement('div');p.dataset.testid='attachment';p.textContent='synthetic.png';
-      document.querySelector('#target').append(p);}};`);
+      acceptFile(document.querySelector('input').files[0]);}};`);
   assert.equal((await probe('locate')).code, 'ok');
   assert.equal((await attachFile()).fileSelected, true);
   assert.equal(await evaluate('globalThis.changes'), 1);
@@ -383,7 +408,7 @@ test('changed composer, text, scope or Voice state invalidates a prepared send',
 test('replacing a prepared attachment cannot send a different attachment with the same text', async () => {
   await fixture(); await probe('locate'); await addPreview();
   await probe('insert', { allowPreparedAttachmentJson: 'true' }); await probe('prepare');
-  await evaluate('document.querySelector("[data-testid=attachment]").replaceWith(document.querySelector("[data-testid=attachment]").cloneNode(true))');
+  await evaluate(`(() => {const next=document.querySelector('[data-testid=attachment]').cloneNode(true);next.querySelector('img').src='data:image/png;base64,DIFFERENT';document.querySelector('[data-testid=attachment]').replaceWith(next);})()`);
   assert.equal((await probe('invoke')).invoked, false);
   assert.equal(await evaluate('globalThis.clicks'), 0);
 });
@@ -411,10 +436,7 @@ test('text, form, route, connected editor and Voice changes produce bounded fail
 async function prepareImmutableImage() {
   await fixture(unified(unifiedEditor + send));
   await probe('locate');
-  await evaluate(`(() => {const wrapper=document.createElement('div');wrapper.dataset.testid='attachment';wrapper.dataset.fileName='same-synthetic.png';
-    const image=document.createElement('img');image.width=64;image.height=36;image.src=${JSON.stringify('data:image/png;base64,' + imageBase64)};
-    const remove=document.createElement('button');remove.type='button';remove.dataset.testid='remove-file-button';
-    wrapper.append(image,remove);document.querySelector('form').append(wrapper);})()`);
+  await addPreview();
   await probe('insert', {allowPreparedAttachmentJson:'true'});
   assert.equal((await probe('prepare')).previewDetected, true);
 }
@@ -442,10 +464,116 @@ test('changed image source, same filename replacement, additions and removals ne
 test('an opaque or mutable preview replacement is not content identity', async () => {
   await fixture(unified(unifiedEditor + send)); await probe('locate');
   await evaluate(`(() => {const i=document.createElement('img');i.width=64;i.height=36;i.src='https://chatgpt.com/test-image.png';document.querySelector('form').append(i);})()`);
-  await probe('insert', {allowPreparedAttachmentJson:'true'}); await probe('prepare');
+  await probe('insert', {allowPreparedAttachmentJson:'true'});
+  assert.equal((await probe('prepare')).code, 'attachment-content-unverifiable');
   await evaluate('document.querySelector("img").replaceWith(document.querySelector("img").cloneNode(true))');
-  assert.equal((await probe('invoke')).code, 'prepared-attachment-node-changed');
+  assert.equal((await probe('invoke')).code, 'prepared-attachment-upload-incomplete');
   assert.equal(await evaluate('globalThis.clicks'), 0);
+});
+
+async function startDelayedUpload(script = '') {
+  await fixture(unified(unifiedEditor + send));
+  await evaluate(`document.querySelector('[role=textbox]').onpaste=e=>{
+    globalThis.changes++;const file=e.clipboardData.files[0];
+    const p=document.createElement('div');p.dataset.testid='attachment';p.dataset.fileName=file.name;
+    p.setAttribute('aria-busy','true');const i=document.createElement('img');i.width=64;i.height=36;
+    i.src=URL.createObjectURL(file);p.append(i);document.querySelector('form').append(p);
+    ${script} e.preventDefault();};`);
+  await probe('locate'); await probe('paste');
+  await probe('insert', {allowPreparedAttachmentJson:'true'});
+}
+
+test('delayed repeated local preview redraws finish before a frozen one-shot send', async () => {
+  await startDelayedUpload(`setTimeout(()=>i.src=URL.createObjectURL(file),400);
+    setTimeout(()=>i.src=URL.createObjectURL(file),1200);
+    setTimeout(()=>p.setAttribute('aria-busy','false'),1700);`);
+  assert.equal((await probe('invoke')).code, 'prepared-attachment-upload-incomplete');
+  assert.equal((await probe('prepare')).code, 'ok');
+  assert.equal(await evaluate('globalThis.changes'), 1);
+  assert.equal(await evaluate('globalThis.__openGameMatePreparedV1.upload.file'), null);
+  assert.equal((await probe('invoke')).invoked, true);
+  assert.equal((await probe('invoke')).invoked, false);
+  assert.equal(await evaluate('globalThis.clicks'), 1);
+});
+
+test('same-name wrong bytes during upload cannot be blessed by later completion', async () => {
+  await startDelayedUpload(`setTimeout(()=>i.src=URL.createObjectURL(new File(['different bytes'],file.name,{type:'image/png'})),80);
+    setTimeout(()=>p.setAttribute('aria-busy','false'),180);`);
+  assert.equal((await probe('prepare')).code, 'attachment-content-changed');
+  assert.equal((await probe('invoke')).invoked, false);
+  assert.equal(await evaluate('globalThis.clicks'), 0);
+});
+
+test('blob to server transition is unprovable and the adapter never fetches the remote preview', async () => {
+  await startDelayedUpload(`globalThis.previewFetches=[];const originalFetch=fetch;
+    globalThis.fetch=(url,...args)=>{previewFetches.push(String(url));return originalFetch(url,...args);};
+    setTimeout(()=>i.src='https://chatgpt.com/synthetic-upload-result.png',80);
+    setTimeout(()=>p.setAttribute('aria-busy','false'),180);`);
+  assert.equal((await probe('prepare')).code, 'attachment-content-unverifiable');
+  assert.equal(await evaluate(`previewFetches.some(url=>url.startsWith('https:'))`), false);
+  assert.equal((await probe('invoke')).invoked, false);
+  assert.equal(await evaluate('globalThis.clicks'), 0);
+});
+
+test('completion freezes even equal bytes under a new local URL', async () => {
+  await startDelayedUpload(`globalThis.originalFile=file;setTimeout(()=>p.setAttribute('aria-busy','false'),80);`);
+  assert.equal((await probe('prepare')).code, 'ok');
+  await evaluate(`document.querySelector('img').src=URL.createObjectURL(originalFile)`);
+  assert.equal((await probe('invoke')).code, 'prepared-attachment-source-changed');
+  assert.equal(await evaluate('globalThis.clicks'), 0);
+});
+
+test('staged text cannot re-baseline a removed prepared image', async () => {
+  await fixture(); await probe('locate'); await addPreview();
+  assert.equal((await probe('prepare', {expectTextJson:'false'})).code, 'ok');
+  await evaluate(`document.querySelector('[data-testid=attachment]').remove()`);
+  assert.equal((await probe('insert', {allowPreparedAttachmentJson:'true'})).textInserted, false);
+  assert.equal((await probe('invoke')).invoked, false);
+  assert.equal(await evaluate('globalThis.clicks'), 0);
+});
+
+test('local blob to inline PNG content binding is accepted while busy', async () => {
+  await startDelayedUpload(`const reader=new FileReader();reader.onload=()=>{i.src=reader.result;};
+    setTimeout(()=>reader.readAsDataURL(file),100);setTimeout(()=>p.setAttribute('aria-busy','false'),400);`);
+  assert.equal((await probe('prepare')).code, 'ok');
+  assert.equal((await probe('invoke')).invoked, true);
+  assert.equal(await evaluate('globalThis.clicks'), 1);
+});
+
+test('a source change after completion cannot race an outstanding byte proof', async () => {
+  await startDelayedUpload(`const originalFetch=fetch;globalThis.fetch=(...args)=>new Promise(resolve=>setTimeout(()=>resolve(originalFetch(...args)),400));
+    setTimeout(()=>p.setAttribute('aria-busy','false'),80);setTimeout(()=>i.src=URL.createObjectURL(file),160);`);
+  assert.equal((await probe('prepare')).code, 'attachment-source-changed-after-completion');
+  assert.equal((await probe('invoke')).invoked, false);
+  assert.equal(await evaluate('globalThis.clicks'), 0);
+});
+
+test('a second native file transfer cannot hide behind the original matching preview', async () => {
+  await fixture();
+  await evaluate(`document.querySelector('input').onchange=e=>{globalThis.changes++;
+    if(changes===1){const p=document.createElement('div');p.dataset.testid='attachment';p.setAttribute('aria-busy','true');
+    const i=document.createElement('img');i.width=64;i.height=36;i.src=URL.createObjectURL(e.target.files[0]);p.append(i);document.querySelector('form').append(p);}}`);
+  await probe('locate'); await attachFile();
+  await probe('insert', {allowPreparedAttachmentJson:'true'});
+  await evaluate(`const input=document.querySelector('input');const transfer=new DataTransfer();
+    transfer.items.add(new File(['different bytes'],'synthetic.png',{type:'image/png'}));input.files=transfer.files;input.dispatchEvent(new Event('input',{bubbles:true}));`);
+  assert.equal((await probe('prepare')).code, 'attachment-file-changed-during-upload');
+  assert.equal((await probe('invoke')).invoked, false);
+  assert.equal(await evaluate('globalThis.clicks'), 0);
+});
+
+test('upload additions, removals, form, text and Voice changes never become prepared', async () => {
+  for (const mutation of [
+    `document.querySelector('form').append(p.cloneNode(true))`, `p.remove()`,
+    `document.querySelector('[role=textbox]').textContent='edited'`,
+    `document.querySelector('form').replaceWith(document.querySelector('form').cloneNode(true))`,
+    `(()=>{const b=document.createElement('button');b.dataset.testid='end-voice-mode-button';document.body.append(b)})()`
+  ]) {
+    await startDelayedUpload(`setTimeout(()=>{${mutation}},80);setTimeout(()=>p.setAttribute('aria-busy','false'),180);`);
+    assert.notEqual((await probe('prepare')).code, 'ok');
+    assert.equal((await probe('invoke')).invoked, false);
+    assert.equal(await evaluate('globalThis.clicks'), 0);
+  }
 });
 test('scoped microphone-off controls identify Voice read-only and suppress automatic preparation', async () => {
   for (const label of ['关闭麦克风', 'Turn off microphone']) {

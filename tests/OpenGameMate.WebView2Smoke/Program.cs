@@ -134,12 +134,13 @@ internal static class Program
                 "<button type='button' data-testid='send-button'>Send</button></form></body></html>";
             await session.Core.CallDevToolsProtocolMethodAsync("Page.setDocumentContent", JsonSerializer.Serialize(new { frameId, html }));
             await Eval("globalThis.__openGameMatePreparedV1=null; globalThis.clicks=0; globalThis.changes=0;");
+            await Eval("globalThis.acceptFile=file=>{const p=document.createElement('div');p.dataset.testid='attachment';p.setAttribute('aria-busy','true');const i=document.createElement('img');i.width=64;i.height=36;i.src=URL.createObjectURL(file);p.append(i);document.querySelector('#target').append(p);setTimeout(()=>p.setAttribute('aria-busy','false'),80);};");
             var attach = acceptsImage
-                ? "const p=document.createElement('div');p.dataset.testid='attachment';p.textContent='synthetic.png';document.querySelector('#target').append(p);"
+                ? "acceptFile(e.clipboardData?.files[0]??e.target.files[0]);"
                 : "";
             await Eval(pasteOnly
                 ? "document.querySelector('textarea').onpaste=e=>{globalThis.changes++;" + attach + "e.preventDefault();};"
-                : "document.querySelector('input').onchange=()=>{globalThis.changes++;" + attach + "};");
+                : "document.querySelector('input').onchange=e=>{globalThis.changes++;" + attach + "};");
             await Eval("document.querySelector('button').onclick=()=>{globalThis.clicks++;document.querySelector('textarea').value='';" +
                 (clearsImage ? "document.querySelectorAll('[data-testid=attachment]').forEach(x=>x.remove());" : "") + "};");
         }
@@ -193,6 +194,10 @@ internal static class Program
         Check(imageOnly.Status == WebAdapterStatus.AdapterInvalid && imageOnly.Code == "attachment-not-observed",
             "file selection alone is not accepted attachment evidence");
         Check((await adapter.SubmitAsync()).Code == "input-not-prepared", "failed image preparation cannot submit");
+        Check((await adapter.PrepareTextAsync(message)).Status == WebAdapterStatus.Succeeded,
+            "a fresh empty text draft does not inherit failed upload state");
+        Check((await adapter.SubmitAsync()).Status == WebAdapterStatus.Succeeded,
+            "text-only preparation after an unaccepted image has its own one-shot permit");
 
         await Fixture();
         await adapter.PrepareTextAsync(message);
@@ -235,11 +240,9 @@ internal static class Program
         Check((await Eval("globalThis.clicks")).GetInt32() == 1 && (await adapter.SubmitAsync()).Code == "input-not-prepared",
             "editor redraw does not grant a second submit permit");
 
-        var syntheticImageUri = JsonSerializer.Serialize("data:image/png;base64," + Convert.ToBase64String(await File.ReadAllBytesAsync(image)));
         async Task PrepareImageLeafAsync()
         {
             await Fixture();
-            await Eval("document.querySelector('input').onchange=()=>{const wrapper=document.createElement('div');wrapper.dataset.testid='attachment';wrapper.dataset.fileName='same-synthetic.png';const img=document.createElement('img');img.width=64;img.height=36;img.src=" + syntheticImageUri + ";const remove=document.createElement('button');remove.type='button';remove.dataset.testid='remove-file-button';wrapper.append(img,remove);document.querySelector('form').append(wrapper);};");
             var prepared = await adapter.PrepareInputAsync(image, message);
             Check(prepared.Status == WebAdapterStatus.Succeeded, "synthetic immutable attachment leaf prepares through production C#");
         }
@@ -256,5 +259,90 @@ internal static class Program
             "same-node image swap returns a bounded source-change code without clicking");
         Check((await adapter.SubmitAsync()).Code == "input-not-prepared" && (await Eval("globalThis.clicks")).GetInt32() == 0,
             "a rejected image swap cannot be retried using the consumed permit");
+
+        async Task DelayedUploadFixtureAsync(string script, bool busy = true)
+        {
+            await Fixture(pasteOnly: true);
+            await Eval("document.querySelector('textarea').onpaste=e=>{globalThis.changes++;const file=e.clipboardData.files[0];globalThis.originalFile=file;" +
+                "const p=document.createElement('div');p.dataset.testid='attachment';p.dataset.fileName=file.name;" +
+                (busy ? "p.setAttribute('aria-busy','true');" : "") +
+                "const i=document.createElement('img');i.width=64;i.height=36;i.src=URL.createObjectURL(file);p.append(i);document.querySelector('form').append(p);" +
+                script + "e.preventDefault();};");
+        }
+
+        await DelayedUploadFixtureAsync("setTimeout(()=>i.src=URL.createObjectURL(file),500);setTimeout(()=>i.src=URL.createObjectURL(file),1200);setTimeout(()=>p.setAttribute('aria-busy','false'),1800);");
+        var started = DateTimeOffset.UtcNow;
+        combined = await adapter.PrepareInputAsync(image, message);
+        Check(combined.Status == WebAdapterStatus.Succeeded && DateTimeOffset.UtcNow - started >= TimeSpan.FromMilliseconds(1700),
+            "preparation waits beyond 750ms for repeated content-bound preview changes and explicit completion");
+        Check((await Eval("globalThis.changes")).GetInt32() == 1 && (await Eval("globalThis.clicks")).GetInt32() == 0,
+            "upload observation neither repeats paste nor submits");
+        Check((await Eval("globalThis.__openGameMatePreparedV1.upload.file===null")).GetBoolean(),
+            "completed preparation releases its original File reference");
+        Check((await adapter.SubmitAsync()).Status == WebAdapterStatus.Succeeded &&
+            (await adapter.SubmitAsync()).Code == "input-not-prepared" && (await Eval("globalThis.clicks")).GetInt32() == 1,
+            "completed delayed upload grants exactly one production submit permit");
+
+        foreach (var (mutation, expectedCode) in new[]
+        {
+            ("i.src=URL.createObjectURL(new File(['different bytes'],file.name,{type:'image/png'}));", "attachment-content-changed"),
+            ("i.src='https://chatgpt.com/synthetic-upload-result.png';", "attachment-content-unverifiable"),
+            ("document.querySelector('form').append(p.cloneNode(true));", "attachment-count-changed-during-upload"),
+            ("p.remove();", "attachment-count-changed-during-upload"),
+            ("document.querySelector('textarea').value='edited';", "preparation-target-changed"),
+            ("document.querySelector('form').replaceWith(document.querySelector('form').cloneNode(true));", "preparation-target-changed"),
+            ("const b=document.createElement('button');b.dataset.testid='end-voice-mode-button';document.body.append(b);", "preparation-target-changed"),
+        })
+        {
+            await DelayedUploadFixtureAsync("setTimeout(()=>{" + mutation + "},500);setTimeout(()=>p.setAttribute('aria-busy','false'),900);");
+            combined = await adapter.PrepareInputAsync(image, message);
+            Check(combined.Code == expectedCode && combined.Status != WebAdapterStatus.Succeeded,
+                $"upload mutation fails with bounded code: {expectedCode}");
+            Check((await adapter.SubmitAsync()).Code == "input-not-prepared" && (await Eval("globalThis.clicks")).GetInt32() == 0,
+                "rejected upload mutation never grants a click or retry");
+        }
+
+        await DelayedUploadFixtureAsync("setTimeout(()=>p.setAttribute('aria-busy','false'),300);");
+        await adapter.PrepareInputAsync(image, message);
+        await Eval("document.querySelector('img').src=URL.createObjectURL(originalFile)");
+        Check((await adapter.SubmitAsync()).Code == "prepared-attachment-source-changed" && (await Eval("globalThis.clicks")).GetInt32() == 0,
+            "even equal bytes at a new URL are rejected after completion freezes the snapshot");
+
+        await DelayedUploadFixtureAsync("setTimeout(()=>p.setAttribute('aria-busy','false'),300);setTimeout(()=>i.src=URL.createObjectURL(file),400);");
+        combined = await adapter.PrepareInputAsync(image, message);
+        Check(combined.Code == "attachment-source-changed-after-completion",
+            "source changes between completion and final preparation observation cannot be re-baselined");
+        Check((await adapter.SubmitAsync()).Code == "input-not-prepared" && (await Eval("globalThis.clicks")).GetInt32() == 0,
+            "a completion race grants no production submit permit");
+
+        await DelayedUploadFixtureAsync("");
+        using (var duringUpload = new CancellationTokenSource(TimeSpan.FromMilliseconds(900)))
+        {
+            try
+            {
+                await adapter.PrepareInputAsync(image, message, duringUpload.Token);
+                throw new InvalidOperationException("Upload preparation did not cancel.");
+            }
+            catch (OperationCanceledException)
+            {
+                Check(true, "cancellation during upload observation propagates");
+            }
+        }
+
+        Check((await Eval("globalThis.changes===1 && globalThis.clicks===0 && document.querySelector('textarea').value.length>0 && document.querySelector('img')!==null && globalThis.__openGameMatePreparedV1.upload.file===null")).GetBoolean() &&
+            (await adapter.SubmitAsync()).Code == "input-not-prepared",
+            "cancelled preparation keeps the draft, releases observation and never retries paste/send");
+
+        foreach (var busy in new[] { true, false })
+        {
+            await DelayedUploadFixtureAsync("", busy);
+            combined = await adapter.PrepareInputAsync(image, message);
+            Check(combined.Code == (busy ? "attachment-upload-timeout" : "attachment-completion-unobserved") &&
+                combined.Status == WebAdapterStatus.AdapterInvalid && combined.AttachmentPreviewDetected && combined.TextInserted,
+                "timeout distinguishes pending upload from missing completion evidence");
+            Check((await Eval("globalThis.changes===1 && globalThis.clicks===0 && document.querySelector('textarea').value.length>0 && document.querySelector('img')!==null && globalThis.__openGameMatePreparedV1.upload.file===null")).GetBoolean() &&
+                (await adapter.SubmitAsync()).Code == "input-not-prepared",
+                "timed out upload keeps both draft channels, releases observation and grants no submit permit");
+        }
     }
 }
