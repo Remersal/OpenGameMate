@@ -1218,7 +1218,8 @@ public partial class MainWindow : Window
             : CompanionPrompts.AutomaticScreenshot(PromptLanguage);
         var preparation = await _adapter!.PrepareInputAsync(capture.Path, message, cancellationToken);
         await SafeLogAsync("adapter.input-prepared", DiagnosticLevel.Information,
-            errorCode: preparation.Code, success: preparation.Status == WebAdapterStatus.Succeeded);
+            errorCode: preparation.Code, success: preparation.Status == WebAdapterStatus.Succeeded,
+            adapterDiagnostics: preparation.Diagnostics);
         if (preparation.Status != WebAdapterStatus.Succeeded ||
             !preparation.ImageAdded ||
             !preparation.TextInserted)
@@ -1299,7 +1300,8 @@ public partial class MainWindow : Window
             attachStartedAt: attachStartedAt);
         var attachment = await _adapter!.PrepareImageAsync(capture.Path, cancellationToken);
         await SafeLogAsync("adapter.image-prepared", DiagnosticLevel.Information,
-            errorCode: attachment.Code, success: attachment.Status == WebAdapterStatus.Succeeded);
+            errorCode: attachment.Code, success: attachment.Status == WebAdapterStatus.Succeeded,
+            adapterDiagnostics: attachment.Diagnostics);
         if (attachment.Status != WebAdapterStatus.Succeeded || !attachment.ImageAdded)
         {
             return MapAdapterStatus(attachment.Status);

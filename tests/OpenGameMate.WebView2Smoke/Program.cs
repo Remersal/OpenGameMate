@@ -257,6 +257,16 @@ internal static class Program
         submission = await adapter.SubmitAsync();
         Check(submission.Code == "prepared-attachment-source-changed" && !submission.TriggerInvoked,
             "same-node image swap returns a bounded source-change code without clicking");
+        Check(submission.Diagnostics is
+        {
+            FailureStage: AdapterFailureStage.Invocation,
+            Attachment:
+            {
+                BeforeSrc: AttachmentSourceKind.Blob, AfterSrc: AttachmentSourceKind.Data,
+                SrcChanged: true, SrcSetChanged: false, BusyObserved: true, CompletionObserved: true
+            }
+        },
+            "production invocation diagnostics preserve source categories, attribute difference and completion without URLs");
         Check((await adapter.SubmitAsync()).Code == "input-not-prepared" && (await Eval("globalThis.clicks")).GetInt32() == 0,
             "a rejected image swap cannot be retried using the consumed permit");
 
@@ -298,6 +308,19 @@ internal static class Program
             combined = await adapter.PrepareInputAsync(image, message);
             Check(combined.Code == expectedCode && combined.Status != WebAdapterStatus.Succeeded,
                 $"upload mutation fails with bounded code: {expectedCode}");
+            if (expectedCode == "attachment-content-unverifiable")
+            {
+                Check(combined.Diagnostics is
+                {
+                    FailureStage: AdapterFailureStage.AttachmentPreparation,
+                    Attachment:
+                    {
+                        BeforeSrc: AttachmentSourceKind.Blob, AfterSrc: AttachmentSourceKind.Http,
+                        SrcChanged: true, AriaBusy: true, BusyObserved: true, CompletionObserved: false
+                    }
+                },
+                    "production preparation diagnostics expose the remote transition and unfinished busy state without URLs");
+            }
             Check((await adapter.SubmitAsync()).Code == "input-not-prepared" && (await Eval("globalThis.clicks")).GetInt32() == 0,
                 "rejected upload mutation never grants a click or retry");
         }

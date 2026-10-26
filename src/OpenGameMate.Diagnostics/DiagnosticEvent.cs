@@ -98,6 +98,16 @@ public sealed record DiagnosticEvent(
             ValidateOptionalToken(candidate.DataTestId, nameof(candidate.DataTestId), 120);
             ValidateOptionalLabel(candidate.AriaLabel, nameof(candidate.AriaLabel), 120);
         }
+
+        if (diagnostics.Attachment is { } attachment &&
+            (attachment.BeforeCount is < 0 or > 99 || attachment.AfterCount is < 0 or > 99 ||
+            !Enum.IsDefined(attachment.BeforeSrc) || !Enum.IsDefined(attachment.AfterSrc) ||
+            !Enum.IsDefined(attachment.BeforeSrcSet) || !Enum.IsDefined(attachment.AfterSrcSet) ||
+            !Enum.IsDefined(attachment.BeforeCurrentSrc) || !Enum.IsDefined(attachment.AfterCurrentSrc) ||
+            !Enum.IsDefined(attachment.UploadPhase)))
+        {
+            throw new DiagnosticEventValidationException("Attachment diagnostics are outside the finite allowlist.");
+        }
     }
 
     private static void ValidateOptionalLabel(string? value, string name, int maximumLength)

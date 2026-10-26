@@ -4,6 +4,19 @@ This change targets the preparation and confirmation paths discussed in [issue #
 
 ## Follow-up to d51af423: conservative upload lifecycle candidate
 
+### Diagnostic follow-up to 412625d (identity rules unchanged)
+
+The `builtin-2026.10.26-composer-4-diag1` build adds finite-category attachment evidence to the existing JSONL events `adapter.input-prepared`, `adapter.image-prepared` and `adapter.submit-probe`. Look under `adapterDiagnostics.attachment`:
+
+- `beforeSrc` / `afterSrc`, `beforeSrcSet` / `afterSrcSet`, and `beforeCurrentSrc` / `afterCurrentSrc` contain only `unknown`, `empty`, `blob`, `data`, `http`, `other` or `mixed`. For preparation, "before" is the first observed image source; for invocation, it is the frozen prepared identity. They cannot reveal an unobserved intermediate source.
+- `srcChanged`, `srcSetChanged` and `currentSrcChanged` independently identify which saved value differs. `beforeCount` and `afterCount` distinguish missing/extra or unclassifiable previews. Counts saturate at 99.
+- `ariaBusy` is omitted from JSONL if no recognized attribute is present, otherwise it is the observed attachment busy boolean. `progressBarVisible` reports a visible progressbar inside that attachment's allowlisted wrappers. `busyObserved`, `completionObserved` and `uploadPhase` report the existing bounded upload observer's state at that observation. "Completion" means the supported semantic busy-to-idle signal, not independently proven server acceptance.
+- `adapterDiagnostics.failureStage` is `attachmentPreparation` when upload preparation fails and `invocation` for the final pre-click guard. The existing specific error code remains unchanged. Preparation timeout retains its source/signal evidence instead of dropping it with the error code.
+
+Only enums, booleans and bounded counts cross the page boundary for these fields. No source URL, filename, digest, pixels, prompt or response is serialized. The C# parser drops unknown strings and undefined enums; the logger rejects out-of-range enum/count values. The diagnostic code does not change identity decisions or grant permits. This follow-up uses only intercepted synthetic fixtures; the known old application PID did not return a process, so no current user composer or source transition was inspected. A subsequent user-operated attempt with this diagnostic build is needed to obtain actual transition evidence. The diagnostic portable build is produced under `artifacts/upload-diagnostics-win-x64`; it is not automatically launched or installed.
+
+Diagnostic follow-up checks passed: Release build (zero warnings/errors), 66 production-script Edge regressions, 65 production-C# WebView2 assertions, the existing 127 .NET cases and three targeted diagnostic parser/logger tests, formatting, and no-debug-symbol portable publishing/privacy validation. An initial new-test expectation for an out-of-range count was corrected to the existing parser's zero fallback, then only the three new .NET tests were rerun.
+
 A subsequent user-operated attempt on 2026-10-26 reached `input-prepared` successfully and then returned `prepared-attachment-source-changed` at Invocation. This narrows the failure to the saved image source/srcset check. The diagnostic contains neither source value nor source type, so it does **not** establish a blob-to-server transition or prove content equivalence. No private screenshot, browser profile or real conversation was read for this follow-up.
 
 The fixed 750 ms preparation delay is replaced by a separate bounded upload phase:

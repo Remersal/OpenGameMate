@@ -44,7 +44,30 @@ public enum AdapterFailureStage
     Invocation,
     PostSubmitObservation,
     RuntimeEvaluation,
+    AttachmentPreparation,
 }
+
+public enum AttachmentSourceKind { Unknown, Empty, Blob, Data, Http, Other, Mixed }
+
+public enum AttachmentUploadPhase { Unknown, Uploading, Ready, Failed, Abandoned }
+
+public sealed record AdapterAttachmentDiagnostics(
+    int BeforeCount,
+    int AfterCount,
+    AttachmentSourceKind BeforeSrc,
+    AttachmentSourceKind AfterSrc,
+    AttachmentSourceKind BeforeSrcSet,
+    AttachmentSourceKind AfterSrcSet,
+    AttachmentSourceKind BeforeCurrentSrc,
+    AttachmentSourceKind AfterCurrentSrc,
+    bool SrcChanged,
+    bool SrcSetChanged,
+    bool CurrentSrcChanged,
+    bool? AriaBusy,
+    bool ProgressBarVisible,
+    bool BusyObserved,
+    bool CompletionObserved,
+    AttachmentUploadPhase UploadPhase);
 
 public sealed record AdapterButtonCandidate(
     string TagName,
@@ -60,14 +83,16 @@ public sealed record AdapterDiagnostics(
     AdapterPageState PageState,
     int DetectedButtonCount,
     IReadOnlyList<AdapterButtonCandidate> CandidateButtons,
-    AdapterFailureStage FailureStage);
+    AdapterFailureStage FailureStage,
+    AdapterAttachmentDiagnostics? Attachment = null);
 
 public sealed record InputPreparationResult(
     bool FileInputSelected,
     bool AttachmentPreviewDetected,
     bool TextInserted,
     string Code,
-    WebAdapterStatus Status)
+    WebAdapterStatus Status,
+    AdapterDiagnostics? Diagnostics = null)
 {
     public bool ImageAdded => FileInputSelected || AttachmentPreviewDetected;
 }

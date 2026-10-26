@@ -170,6 +170,45 @@ const ogmCanInsertText = (composer, allowPreparedAttachment) => {
     (!state.hasAttachment || ogmSameAttachments(state)));
 };
 
+// Read-only, finite-category diagnostics. No URL, file digest or page text is
+// returned. Keep this separate from identity decisions and lifecycle sampling.
+const ogmSourceKind = value => {
+  if (value === null || value === undefined) return 'Unknown';
+  if (!value.trim()) return 'Empty';
+  const kind = source => /^blob:/i.test(source) ? 'Blob' : /^data:/i.test(source) ? 'Data' :
+    /^https?:/i.test(source) ? 'Http' : 'Other';
+  const kinds = new Set((value.match(/(?:^|\s)(?:blob:|data:|https?:)/gi) ?? []).map(token => kind(token.trim())));
+  return kinds.size > 1 ? 'Mixed' : kind(value.trim());
+};
+const ogmAttachmentDiagnostics = (scope, preparing = false) => {
+  const state = globalThis[ogmPreparedKey];
+  const upload = state?.upload;
+  const current = ogmAttachments(scope);
+  const expected = preparing ? upload?.diagnosticInitial : state?.attachmentIdentities?.[0];
+  const image = current.find(node => node === expected?.node) ?? (current.length === 1 ? current[0] : null);
+  const actual = image instanceof HTMLImageElement ? ogmAttachmentIdentity(image) : null;
+  const wrappers = scope ? [...new Set(ogmAttachmentSelectors.flatMap(selector =>
+    [...scope.querySelectorAll(selector)].filter(node => !(node instanceof HTMLImageElement) &&
+      !node.matches('button') && ogmVisible(node) && (actual ? node.contains(image) : current.includes(node)))))] : [];
+  const ariaNodes = [...new Set(wrappers.flatMap(node => [node,
+    ...[...node.querySelectorAll('[aria-busy]')].filter(ogmVisible)]))];
+  const ariaValues = ariaNodes.map(node => node.getAttribute('aria-busy')).filter(value => value === 'true' || value === 'false');
+  return {
+    beforeCount: Math.min(99, preparing ? (expected ? 1 : 0) : state?.attachmentIdentities?.length ?? 0),
+    afterCount: Math.min(99, current.length),
+    beforeSrc: ogmSourceKind(expected?.source), afterSrc: ogmSourceKind(actual?.source),
+    beforeSrcSet: ogmSourceKind(expected?.sourceSet), afterSrcSet: ogmSourceKind(actual?.sourceSet),
+    beforeCurrentSrc: ogmSourceKind(expected?.selectedSource), afterCurrentSrc: ogmSourceKind(actual?.selectedSource),
+    srcChanged: Boolean(expected && actual && expected.source !== actual.source),
+    srcSetChanged: Boolean(expected && actual && expected.sourceSet !== actual.sourceSet),
+    currentSrcChanged: Boolean(expected && actual && expected.selectedSource !== actual.selectedSource),
+    ariaBusy: ariaValues.length ? ariaValues.includes('true') : null,
+    progressBarVisible: wrappers.some(node => [...node.querySelectorAll('[role="progressbar"]')].some(ogmVisible)),
+    busyObserved: Boolean(upload?.sawBusy), completionObserved: Boolean(upload?.completed),
+    uploadPhase: ({ uploading: 'Uploading', ready: 'Ready', failed: 'Failed', abandoned: 'Abandoned' })[upload?.phase] ?? 'Unknown'
+  };
+};
+
 // Upload preparation is a different phase from a frozen submission. Only local
 // preview bytes can be bound to the File supplied for this attempt. Never fetch a
 // server preview, infer identity from a filename, or treat send readiness as upload
@@ -213,6 +252,7 @@ const ogmBeginUpload = (composer, digest, size) => {
     if (!(image instanceof HTMLImageElement)) return;
     upload.seenImage = true;
     const identity = ogmAttachmentIdentity(image);
+    upload.diagnosticInitial ??= identity;
     if (upload.completed && !sameSource(upload.completed, identity)) {
       fail('attachment-source-changed-after-completion'); return;
     }

@@ -509,10 +509,43 @@ test('blob to server transition is unprovable and the adapter never fetches the 
     globalThis.fetch=(url,...args)=>{previewFetches.push(String(url));return originalFetch(url,...args);};
     setTimeout(()=>i.src='https://chatgpt.com/synthetic-upload-result.png',80);
     setTimeout(()=>p.setAttribute('aria-busy','false'),180);`);
-  assert.equal((await probe('prepare')).code, 'attachment-content-unverifiable');
+  const result = await probe('prepare');
+  assert.equal(result.code, 'attachment-content-unverifiable');
+  assert.equal(result.attachmentDiagnostics.beforeSrc, 'Blob');
+  assert.equal(result.attachmentDiagnostics.afterSrc, 'Http');
+  assert.equal(result.attachmentDiagnostics.srcChanged, true);
+  assert.equal(result.attachmentDiagnostics.srcSetChanged, false);
+  assert.equal(result.attachmentDiagnostics.busyObserved, true);
+  assert.equal(result.attachmentDiagnostics.completionObserved, false);
+  assert.equal(JSON.stringify(result).includes('synthetic-upload-result'), false);
   assert.equal(await evaluate(`previewFetches.some(url=>url.startsWith('https:'))`), false);
   assert.equal((await probe('invoke')).invoked, false);
   assert.equal(await evaluate('globalThis.clicks'), 0);
+});
+
+test('source diagnostics distinguish srcset-only changes without returning source values', async () => {
+  await prepareImmutableImage();
+  await evaluate(`document.querySelector('img').srcset='https://chatgpt.com/SYNTHETIC_PRIVATE_SOURCE 1x'`);
+  const result = await probe('invoke');
+  assert.equal(result.code, 'prepared-attachment-source-changed');
+  assert.equal(result.attachmentDiagnostics.beforeSrc, 'Blob');
+  assert.equal(result.attachmentDiagnostics.afterSrc, 'Blob');
+  assert.equal(result.attachmentDiagnostics.beforeSrcSet, 'Empty');
+  assert.equal(result.attachmentDiagnostics.afterSrcSet, 'Http');
+  assert.equal(result.attachmentDiagnostics.srcChanged, false);
+  assert.equal(result.attachmentDiagnostics.srcSetChanged, true);
+  assert.equal(result.attachmentDiagnostics.busyObserved, true);
+  assert.equal(result.attachmentDiagnostics.completionObserved, true);
+  assert.equal(result.attachmentDiagnostics.uploadPhase, 'Ready');
+  assert.equal(JSON.stringify(result).includes('SYNTHETIC_PRIVATE_SOURCE'), false);
+  assert.equal(await evaluate('globalThis.clicks'), 0);
+});
+
+test('source categories are finite for empty, blob, data, http and mixed attributes', async () => {
+  const actual = await evaluate(render(wrapper, {expression:
+    `[null,'','blob:https://chatgpt.com/synthetic','data:image/png;base64,AAAA','https://chatgpt.com/synthetic',
+    '/relative-synthetic','blob:https://chatgpt.com/synthetic 1x, https://chatgpt.com/synthetic 2x'].map(ogmSourceKind)`}));
+  assert.deepEqual(actual, ['Unknown','Empty','Blob','Data','Http','Other','Mixed']);
 });
 
 test('completion freezes even equal bytes under a new local URL', async () => {
